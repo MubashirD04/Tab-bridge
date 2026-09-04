@@ -1,0 +1,26 @@
+{
+  "name": "tab-bridge-daemon",
+  "version": "0.1.0",
+  "description": "Local daemon: owns the tab allow-list and exposes it to MCP clients (Claude Code, via the mcp-stdio shim to Claude Desktop) and to the Tab Bridge Firefox extension.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tab-bridge": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

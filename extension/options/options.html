@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tab Bridge — Settings</title>
+    <style>
+      body {
+        max-width: 560px;
+        margin: 40px auto;
+        font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #1f2328;
+        padding: 0 16px;
+      }
+      h1 {
+        font-size: 20px;
+      }
+      .field {
+        margin-bottom: 16px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .hint {
+        color: #57606a;
+        font-size: 12.5px;
+        margin-top: 4px;
+      }
+      button {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: 1px solid #1f6feb;
+        background: #1f6feb;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #save-status {
+        margin-left: 10px;
+        font-size: 12.5px;
+        color: #116329;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      td,
+      th {
+        text-align: left;
+        padding: 4px 6px;
+        border-bottom: 1px solid #f0f1f3;
+      }
+      .trust-note {
+        background: #f6f8fa;
+        border: 1px solid #e6e8eb;
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 12.5px;
+        color: #424a53;
+      }
+      #trusted-ports-form {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        margin: 12px 0;
+      }
+      #trusted-ports-form .field {
+        margin-bottom: 0;
+      }
+      #trusted-ports-form label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #57606a;
+      }
+      #tp-port {
+        width: 90px;
+      }
+      #tp-label {
+        width: 160px;
+      }
+      select {
+        padding: 6px 8px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+      }
+      #trusted-ports-form button {
+        padding: 6px 14px;
+      }
+      #trusted-ports-form button:disabled,
+      button.remove-port:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button.remove-port {
+        padding: 3px 10px;
+        border-radius: 6px;
+        border: 1px solid #d0d7de;
+        background: #f6f8fa;
+        color: #cf222e;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      #trusted-ports-error {
+        color: #cf222e;
+        font-size: 12.5px;
+        min-height: 1.4em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tab Bridge — Settings</h1>
+
+    <div class="trust-note">
+      Tab Bridge never sends anything anywhere except <code>127.0.0.1</code> on this machine. It only reads tabs you
+      explicitly allow, or tabs on a trusted local dev port — nothing else, and nothing is written to disk unless
+      you turn on the (separate, opt-in) recording feature.
+    </div>
+
+    <form id="settings-form">
+      <div class="field">
+        <label for="daemon-port">Daemon port</label>
+        <input type="number" id="daemon-port" value="8765" />
+        <div class="hint">Matches the port the <code>tab-bridge start</code> daemon printed on startup.</div>
+      </div>
+
+      <div class="field">
+        <label for="pairing-token">Pairing token</label>
+        <input type="text" id="pairing-token" placeholder="paste from ~/.tab-bridge/config.json" />
+        <div class="hint">
+          Run <code>tab-bridge start</code> once to generate it, then copy the <code>token</code> field from
+          <code>~/.tab-bridge/config.json</code> here.
+        </div>
+      </div>
+
+      <button type="submit">Save &amp; reconnect</button>
+      <span id="save-status"></span>
+    </form>
+
+    <h2>Trusted local dev ports</h2>
+    <p class="hint">
+      Any tab open on <code>127.0.0.1</code>/<code>localhost</code> at one of these ports is readable by Claude
+      automatically — no click needed in the popup. Only add ports you actually run a local dev server on.
+    </p>
+    <div id="trusted-ports"></div>
+
+    <form id="trusted-ports-form">
+      <div class="field">
+        <label for="tp-port">Port</label>
+        <input type="number" id="tp-port" min="1" max="65535" placeholder="3000" />
+      </div>
+      <div class="field">
+        <label for="tp-protocol">Protocol</label>
+        <select id="tp-protocol">
+          <option value="http">http</option>
+          <option value="https">https</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="tp-label">Label (optional)</label>
+        <input type="text" id="tp-label" placeholder="Vite" />
+      </div>
+      <button type="submit">Add port</button>
+    </form>
+    <p id="trusted-ports-error"></p>
+  </body>
+  <script src="options.js"></script>
+</html>

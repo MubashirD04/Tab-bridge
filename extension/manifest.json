@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Bridge",
+  "version": "0.1.0",
+  "description": "Lets Claude read tabs you explicitly allow, or any tab on your local dev server (e.g. VS Code Live Server) — nothing else, and nothing ever leaves your machine.",
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": "icons/icon.svg",
+    "default_title": "Tab Bridge"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "webRequest",
+    "alarms"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://127.0.0.1/*",
+    "https://localhost/*",
+    "<all_urls>"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-bridge@tab-bridge.dev",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "tab-bridge-mcp-stdio",
+  "version": "0.1.0",
+  "description": "Thin stdio MCP transport adapter for the Tab Bridge daemon, for MCP clients (like Claude Desktop) that only support launching a local stdio subprocess rather than connecting to a standing HTTP server.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tab-bridge-mcp-stdio": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
+}

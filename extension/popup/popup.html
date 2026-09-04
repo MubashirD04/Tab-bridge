@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tab Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <span class="title">Tab Bridge</span>
+      <span id="status" class="status status--disconnected">checking…</span>
+    </header>
+
+    <div id="unpaired" class="notice" hidden>
+      Not paired with a daemon yet. <a href="#" id="open-options">Open settings</a> to paste in the pairing token
+      from <code>~/.tab-bridge/config.json</code>.
+    </div>
+
+    <div id="unauthorized" class="notice notice--error" hidden>
+      The daemon rejected the pairing token. <a href="#" id="open-options-unauthorized">Open settings</a> and
+      re-check it against what <code>tab-bridge status</code> prints.
+    </div>
+
+    <div id="unreachable" class="notice" hidden>
+      Can't reach a daemon on port <span id="unreachable-port"></span>. Run <code>tab-bridge start</code> in a
+      terminal, or check the port in <a href="#" id="open-options-unreachable">Settings</a>.
+    </div>
+
+    <ul id="tab-list" class="tab-list"></ul>
+
+    <footer>
+      <a href="#" id="open-options-footer">Settings</a>
+      <span class="hint">Only tabs you allow here, or on a trusted local dev port, are ever readable.</span>
+    </footer>
+  </body>
+  <script src="popup.js"></script>
+</html>
