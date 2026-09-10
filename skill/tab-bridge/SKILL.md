@@ -57,13 +57,17 @@ run in this project, that file is new, and step 3's "tools aren't showing up
 yet" note is the expected reason (`/mcp` hasn't picked up a server that
 didn't exist at session start).
 
-**3. If the tab-bridge MCP tools don't appear in your tool list yet, they
-may have failed to connect before the daemon existed.** Claude Code retries
-HTTP MCP connections with backoff, but this isn't guaranteed to be
-instant or exhaustive. If the tools genuinely aren't available after the
-daemon is confirmed healthy, tell the user: *"tab-bridge is running now, but
-Claude Code connected to it before it was up — run `/mcp` to reconnect."*
-Don't guess or fabricate tool output; wait for the reconnect.
+**3. If the tab-bridge MCP tools don't appear in your tool list, or a system
+reminder reports the `tab-bridge` server failed to connect (e.g.
+`ConnectionRefused`), it connected before the daemon existed.** In this
+environment that connection does not retry itself in the background — it
+stays failed for the rest of the session until the server is reconnected.
+So once the daemon is confirmed healthy (step 2), tell the user plainly:
+*"tab-bridge is running now, but Claude Code tried to connect to it before
+it was up. Please run `/mcp` and confirm the `tab-bridge` server shows as
+connected, then let me know."* Don't guess or fabricate tool output, and
+don't retry the tool call yourself expecting it to start working — wait for
+the user to reconnect it via `/mcp` and confirm before proceeding.
 
 **4. Do the actual work** — call `list_allowed_tabs` first to see what's
 available, then whichever of `get_page_content` / `screenshot_tab` /

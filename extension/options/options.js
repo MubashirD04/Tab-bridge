@@ -82,6 +82,8 @@ async function load() {
   const status = await browser.runtime.sendMessage({ type: "get_status" });
   currentlyConnected = status.connectionState === "connected";
   currentTrustedPorts = status.trustedPorts || [];
+  document.getElementById("capture-console-logs").checked = Boolean(status.captureConsoleLogs);
+  document.getElementById("capture-network-requests").checked = Boolean(status.captureNetworkRequests);
 
   const addButton = document.querySelector("#trusted-ports-form button[type=submit]");
   addButton.disabled = !currentlyConnected;
@@ -142,5 +144,22 @@ document.getElementById("trusted-ports-form").addEventListener("submit", async (
     labelInput.value = "";
   }
 });
+
+let captureStatusTimer = null;
+async function saveCaptureSettings() {
+  const captureConsoleLogs = document.getElementById("capture-console-logs").checked;
+  const captureNetworkRequests = document.getElementById("capture-network-requests").checked;
+  await browser.runtime.sendMessage({ type: "save_capture_settings", captureConsoleLogs, captureNetworkRequests });
+
+  const statusEl = document.getElementById("capture-status");
+  statusEl.textContent = "Saved.";
+  clearTimeout(captureStatusTimer);
+  captureStatusTimer = setTimeout(() => {
+    statusEl.textContent = "";
+  }, 1500);
+}
+
+document.getElementById("capture-console-logs").addEventListener("change", saveCaptureSettings);
+document.getElementById("capture-network-requests").addEventListener("change", saveCaptureSettings);
 
 load();

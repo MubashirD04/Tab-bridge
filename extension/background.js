@@ -81,6 +81,13 @@ let pairingToken = null;
 // apart from "daemon's running but the token's wrong," which need different
 // fixes from a less-technical user's point of view.
 let connectionState = "disconnected";
+// Console logs and network requests are sensitive enough (page-internal state,
+// request/response headers) that capturing them is opt-in and off by default,
+// unlike page content/screenshots which only ever happen on an explicit
+// per-tab/per-request basis anyway. Toggled from the options page; see
+// saveCaptureSettings() below.
+let captureConsoleLogs = false;
+let captureNetworkRequests = false;
 let trustedPorts = []; // [{port, label, protocol}] — as reported by the daemon in hello_ack
 let pendingTrustedPortsUpdate = null; // {resolve, timer} — see updateTrustedPorts()
 // Origins with a still-valid manual grant in this browser session, as
@@ -97,15 +104,26 @@ let grantedOrigins = new Set();
 // for UI/gating purposes only — the daemon's own allow-list check on every
 // MCP tool call is the actual authority (see mcpServer.ts requireAllowed()).
 const allowedTabIds = new Set();
-const capturePipelineInjected = new Set();
+// Split so console-hook.js injection can be gated on captureConsoleLogs
+// independently of content-script.js, which is always needed (it answers
+// get_page_content/screenshot_tab's read_content/read_dimensions requests).
+const contentScriptInjected = new Set();
+const consoleHookInjected = new Set();
 const pendingNetworkRequests = new Map(); // requestId -> partial entry
 
 // ---- settings & session id ----
 
 async function loadSettings() {
-  const stored = await browser.storage.local.get(["daemonPort", "pairingToken"]);
+  const stored = await browser.storage.local.get([
+    "daemonPort",
+    "pairingToken",
+    "captureConsoleLogs",
+    "captureNetworkRequests",
+  ]);
   daemonPort = stored.daemonPort || DEFAULT_DAEMON_PORT;
   pairingToken = stored.pairingToken || null;
+  captureConsoleLogs = Boolean(stored.captureConsoleLogs);
+  captureNetworkRequests = Boolean(stored.captureNetworkRequests);
 }
 
 async function getBrowserSessionId() {
@@ -279,23 +297,37 @@ browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 browser.tabs.onRemoved.addListener((tabId) => {
   sendRaw({ type: "tab_removed", tabId });
   allowedTabIds.delete(tabId);
-  capturePipelineInjected.delete(tabId);
+  contentScriptInjected.delete(tabId);
+  consoleHookInjected.delete(tabId);
 });
 
 // ---- capture pipeline (only ever injected into allowed tabs) ----
 
 async function ensureCapturePipeline(tabId) {
-  if (capturePipelineInjected.has(tabId)) return;
-  capturePipelineInjected.add(tabId);
-  try {
-    await browser.scripting.executeScript({ target: { tabId }, files: ["content-script.js"] });
-    await browser.scripting.executeScript({ target: { tabId }, files: ["console-hook.js"], world: "MAIN" });
-  } catch (err) {
-    // Injection can legitimately fail (e.g. a browser-internal page slipped
-    // through, or the tab navigated away mid-injection) — don't crash the
-    // background script over it.
-    capturePipelineInjected.delete(tabId);
-    console.warn("Tab Bridge: capture pipeline injection failed", err);
+  if (!contentScriptInjected.has(tabId)) {
+    contentScriptInjected.add(tabId);
+    try {
+      await browser.scripting.executeScript({ target: { tabId }, files: ["content-script.js"] });
+    } catch (err) {
+      // Injection can legitimately fail (e.g. a browser-internal page slipped
+      // through, or the tab navigated away mid-injection) — don't crash the
+      // background script over it.
+      contentScriptInjected.delete(tabId);
+      console.warn("Tab Bridge: content script injection failed", err);
+    }
+  }
+  // console-hook.js is only injected when the user has opted into console
+  // capture (see captureConsoleLogs) — gated again at the relay listener
+  // below so toggling the setting off takes effect immediately even for a
+  // tab where the hook is already running.
+  if (captureConsoleLogs && !consoleHookInjected.has(tabId)) {
+    consoleHookInjected.add(tabId);
+    try {
+      await browser.scripting.executeScript({ target: { tabId }, files: ["console-hook.js"], world: "MAIN" });
+    } catch (err) {
+      consoleHookInjected.delete(tabId);
+      console.warn("Tab Bridge: console hook injection failed", err);
+    }
   }
 }
 
@@ -372,6 +404,7 @@ function isTabGoneError(err) {
 
 browser.runtime.onMessage.addListener((message, sender) => {
   if (message?.type !== "console_log_relay") return undefined;
+  if (!captureConsoleLogs) return undefined; // opt-in permission — see options page
   const tabId = sender.tab?.id;
   if (tabId === undefined || !allowedTabIds.has(tabId)) return undefined; // extension-side allow check too
   sendRaw({
@@ -391,6 +424,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
 
 browser.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
+    if (!captureNetworkRequests) return; // opt-in permission — see options page
     if (!allowedTabIds.has(details.tabId)) return;
     pendingNetworkRequests.set(details.requestId, {
       tabId: details.tabId,
@@ -412,6 +446,7 @@ browser.webRequest.onCompleted.addListener(
     const pending = pendingNetworkRequests.get(details.requestId);
     if (!pending) return;
     pendingNetworkRequests.delete(details.requestId);
+    if (!captureNetworkRequests) return; // opt-in permission — see options page
     if (!allowedTabIds.has(details.tabId)) return;
     sendRaw({
       type: "network_request",
@@ -468,6 +503,9 @@ browser.runtime.onMessage.addListener((message) => {
   if (message?.type === "update_trusted_ports") {
     return updateTrustedPorts(message.ports);
   }
+  if (message?.type === "save_capture_settings") {
+    return saveCaptureSettings(message.captureConsoleLogs, message.captureNetworkRequests);
+  }
   return undefined;
 });
 
@@ -495,12 +533,34 @@ function updateTrustedPorts(ports) {
   });
 }
 
+async function saveCaptureSettings(newCaptureConsoleLogs, newCaptureNetworkRequests) {
+  await browser.storage.local.set({
+    captureConsoleLogs: Boolean(newCaptureConsoleLogs),
+    captureNetworkRequests: Boolean(newCaptureNetworkRequests),
+  });
+  captureConsoleLogs = Boolean(newCaptureConsoleLogs);
+  captureNetworkRequests = Boolean(newCaptureNetworkRequests);
+  // Retroactively inject console-hook.js into already-allowed tabs so
+  // turning the setting on takes effect immediately, without needing a
+  // reload. Turning it off is enforced at the relay listener instead (see
+  // above) — the hook itself is harmless left running, since nothing
+  // downstream of it forwards data once the flag is false.
+  if (captureConsoleLogs) {
+    for (const tabId of allowedTabIds) {
+      await ensureCapturePipeline(tabId);
+    }
+  }
+  return { ok: true };
+}
+
 async function getStatus() {
   const tabs = await browser.tabs.query({});
   return {
     connectionState,
     daemonPort,
     hasPairingToken: Boolean(pairingToken),
+    captureConsoleLogs,
+    captureNetworkRequests,
     trustedPorts,
     tabs: tabs
       .filter((t) => t.url && /^https?:/.test(t.url) && !t.incognito)

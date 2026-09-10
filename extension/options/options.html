@@ -116,6 +116,20 @@
         font-size: 12.5px;
         min-height: 1.4em;
       }
+      .checkbox-field label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 400;
+      }
+      .checkbox-field input[type="checkbox"] {
+        width: auto;
+      }
+      #capture-status {
+        margin-left: 6px;
+        font-size: 12.5px;
+        color: #116329;
+      }
     </style>
   </head>
   <body>
@@ -146,6 +160,20 @@
       <button type="submit">Save &amp; reconnect</button>
       <span id="save-status"></span>
     </form>
+
+    <h2>Capture permissions</h2>
+    <p class="hint">
+      Off by default. These control whether Claude's <code>get_console_logs</code> and
+      <code>get_network_requests</code> tools have anything to return for an allowed tab — nothing is captured for
+      either until you turn it on here, and nothing captured ever leaves this machine either way.
+    </p>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="capture-console-logs" /> Allow console log capture</label>
+    </div>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="capture-network-requests" /> Allow network request capture</label>
+    </div>
+    <span id="capture-status"></span>
 
     <h2>Trusted local dev ports</h2>
     <p class="hint">

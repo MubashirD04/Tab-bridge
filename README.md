@@ -30,6 +30,11 @@ permissions and that deserves a straight answer:**
 - **Captured logs live in memory only.** Nothing is written to disk unless
   you explicitly turn on the (separate, not-yet-built — see
   [Roadmap](#roadmap)) recording feature.
+- **Console logs and network requests are opt-in and off by default.**
+  `get_console_logs`/`get_network_requests` return nothing for a tab until
+  you turn on the matching toggle in the extension's **Settings → Capture
+  permissions** — allowing a tab only ever grants page content/screenshot
+  access on its own. See [Capture permissions](#capture-permissions).
 
 The full design reasoning lives in `tab-bridge-blueprint.md` at the repo
 root — this README covers setup and usage; that doc covers *why* each of
@@ -96,6 +101,9 @@ as a temporary add-on for now:
 session until it's signed. `npm run lint:extension` runs the same
 `web-ext lint` check used before packaging a real build.)
 
+<!-- TODO: screenshot — Settings page with the pairing token field filled in -->
+![Extension settings page](docs/screenshots/settings-pairing.png)
+
 If the popup's status badge says **wrong token** instead of **not
 connected**, the daemon is running and reachable but rejected the pairing
 token — re-check it against what `tab-bridge status` prints. **Not
@@ -150,6 +158,9 @@ port (`http://127.0.0.1:5500`/`5501` by default — VS Code Live Server's
 ports), it's allowed automatically; otherwise click the Tab Bridge icon and
 hit **Allow** next to the tab. Then just ask Claude about it.
 
+<!-- TODO: screenshot — popup listing tabs with the Allow button -->
+![Popup showing an allowable tab](docs/screenshots/popup-allow.png)
+
 Running Vite, webpack-dev-server, or Live Server on a different port? Add it
 from **Settings → Trusted local dev ports** — no daemon restart or manual
 JSON editing needed.
@@ -169,10 +180,33 @@ JSON editing needed.
   page (add/remove ports, no daemon restart) — see [Allow a
   tab](#4-allow-a-tab).
 
+## Capture permissions
+
+Allowing a tab only ever grants `get_page_content`/`screenshot_tab` access.
+`get_console_logs` and `get_network_requests` are gated behind a second,
+separate opt-in — off by default — because console output and request
+headers can carry more incidental sensitive data than a page's rendered
+content does:
+
+- Turn them on from the extension's **Settings → Capture permissions**,
+  per-toggle for console logs and network requests.
+- Turning a toggle on takes effect immediately for already-allowed tabs, no
+  reload needed. Turning it off stops new data from being sent to the
+  daemon immediately too, even if the underlying capture hook is still
+  attached to the page.
+- These settings are stored locally (`browser.storage.local`) and persist
+  across restarts, unlike the origin allow-list itself — see [How
+  allow-listing works](#how-allow-listing-works).
+
+<!-- TODO: screenshot — Settings page's Capture permissions section with both toggles -->
+![Capture permissions toggles](docs/screenshots/options-capture-permissions.png)
+
 ## The five tools
 
 All read-only: `list_allowed_tabs`, `get_page_content`, `screenshot_tab`,
-`get_console_logs`, `get_network_requests`. `screenshot_tab` returns the
+`get_console_logs`, `get_network_requests`. The last two return empty
+results for an allowed tab until you enable their matching toggle — see
+[Capture permissions](#capture-permissions). `screenshot_tab` returns the
 image as a real MCP `type: "image"` content block (plus a small text block
 with `width`/`height`/`capturedAt`) — that's what makes it something Claude
 actually *sees*, not just bytes it's holding; a JSON blob with a base64
