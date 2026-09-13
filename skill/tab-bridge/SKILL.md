@@ -82,6 +82,11 @@ about an error that already happened, say so plainly rather than reporting
 running and have them reproduce the issue, so the next call actually has
 something to show.
 
+If either of those tools returns a `CAPTURE_DISABLED` error, the user hasn't
+turned that kind of capture on. Don't treat it as "no errors" or "no
+requests". Tell them to enable it in the extension's **Settings → Capture
+permissions**, then reproduce the issue.
+
 **5. When you're done, stop the daemon — but only if you started it.**
 
 ```bash

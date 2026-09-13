@@ -24,15 +24,17 @@ permissions and that deserves a straight answer:**
   every single tool call, the same as before this permission existed.
 - **A manual "allow" lasts until you restart your browser**, not
   indefinitely — see [How allow-listing works](#how-allow-listing-works).
-- **`Authorization`/`Cookie`/`Set-Cookie` headers are always redacted** in
-  captured network requests. This is fixed behavior, not a setting you can
+- **Credential headers are always redacted** in captured network requests:
+  `Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`,
+  `X-API-Key`, `X-Auth-Token`, `X-Access-Token`, `X-CSRF-Token`,
+  `X-XSRF-Token` and `X-Amz-Security-Token`. This is fixed behavior, not a setting you can
   accidentally turn off.
 - **Captured logs live in memory only.** Nothing is written to disk unless
   you explicitly turn on the (separate, not-yet-built — see
   [Roadmap](#roadmap)) recording feature.
 - **Console logs and network requests are opt-in and off by default.**
-  `get_console_logs`/`get_network_requests` return nothing for a tab until
-  you turn on the matching toggle in the extension's **Settings → Capture
+  `get_console_logs`/`get_network_requests` return a `CAPTURE_DISABLED`
+  error for a tab until you turn on the matching toggle in the extension's **Settings → Capture
   permissions** — allowing a tab only ever grants page content/screenshot
   access on its own. See [Capture permissions](#capture-permissions).
 
@@ -192,8 +194,18 @@ content does:
   per-toggle for console logs and network requests.
 - Turning a toggle on takes effect immediately for already-allowed tabs, no
   reload needed. Turning it off stops new data from being sent to the
-  daemon immediately too, even if the underlying capture hook is still
-  attached to the page.
+  daemon immediately, the daemon discards what it had already captured for
+  that toggle, and the console hook restores the page's original `console`.
+- Console capture starts at `document_start`, so it includes output from
+  page load. Alongside `console.*` calls, it records uncaught exceptions,
+  unhandled promise rejections and failed resource loads, each as a
+  `level: "error"` entry with a `kind` saying which it was.
+- Because Firefox match patterns can't specify a port, a trusted
+  `localhost` port loads the hook on every `localhost` page. On a page that
+  isn't allowed, the hook holds entries locally until the extension says
+  no, then removes itself; nothing from that page is sent.
+- Network capture includes failed requests (with `error`), redirect hops
+  (with `redirectUrl`) and cached responses (`fromCache`).
 - These settings are stored locally (`browser.storage.local`) and persist
   across restarts, unlike the origin allow-list itself — see [How
   allow-listing works](#how-allow-listing-works).
@@ -204,8 +216,10 @@ content does:
 ## The five tools
 
 All read-only: `list_allowed_tabs`, `get_page_content`, `screenshot_tab`,
-`get_console_logs`, `get_network_requests`. The last two return empty
-results for an allowed tab until you enable their matching toggle — see
+`get_console_logs`, `get_network_requests`. The last two return a
+`CAPTURE_DISABLED` error for an allowed tab until you enable their matching
+toggle, so an empty list always means nothing was captured, never that
+capture was off — see
 [Capture permissions](#capture-permissions). `screenshot_tab` returns the
 image as a real MCP `type: "image"` content block (plus a small text block
 with `width`/`height`/`capturedAt`) — that's what makes it something Claude
@@ -213,7 +227,7 @@ actually *sees*, not just bytes it's holding; a JSON blob with a base64
 string buried inside it wouldn't render as a picture to the model at all.
 See `tab-bridge-blueprint.md` Section 3 for exact input/output shapes and
 the standard error format (`TAB_NOT_ALLOWED`, `TAB_NOT_FOUND`, `EXTENSION_DISCONNECTED`,
-`CAPTURE_FAILED`, `UNAUTHORIZED`).
+`CAPTURE_FAILED`, `CAPTURE_DISABLED`, `UNAUTHORIZED`).
 
 ## Running the daemon on demand
 

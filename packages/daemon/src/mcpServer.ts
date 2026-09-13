@@ -130,17 +130,32 @@ export function buildMcpServer(deps: McpDeps): McpServer {
     "get_console_logs",
     {
       title: "Get console logs",
-      description: "Returns recently captured console output (log/warn/error/info/debug) for an allowed tab.",
+      description:
+        "Returns recently captured console output (log/warn/error/info/debug) for an allowed tab, including uncaught exceptions, unhandled promise rejections and failed resource loads (level \"error\", with `kind` saying which).",
       inputSchema: {
         tabId: z.number(),
         since: z.string().optional().describe("ISO 8601 timestamp; only entries at or after this time."),
         levels: z.array(z.string()).optional().describe("Filter to these console levels only."),
-        limit: z.number().optional().describe("Cap on the number of entries returned (most recent first)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Return only the most recent N matching entries. Entries are always ordered oldest first."),
       },
     },
     async ({ tabId, since, levels, limit }) => {
       if (!tabRegistry.isAllowed(tabId)) {
         return errResult(new TabBridgeError("TAB_NOT_ALLOWED", `Tab ${tabId} is not on the allow-list.`, tabId));
+      }
+      if (!tabRegistry.getCaptureSettings().consoleLogs) {
+        return errResult(
+          new TabBridgeError(
+            "CAPTURE_DISABLED",
+            "Console log capture is turned off in the Tab Bridge extension (Settings → Capture permissions), so nothing has been recorded. This does not mean the page has no console output.",
+            tabId
+          )
+        );
       }
       const entries = tabRegistry.getConsoleLogs(tabId, { since, levels, limit });
       return ok({ tabId, entries });
@@ -152,17 +167,31 @@ export function buildMcpServer(deps: McpDeps): McpServer {
     {
       title: "Get network requests",
       description:
-        "Returns recently observed network requests for an allowed tab. Authorization/Cookie/Set-Cookie header values are always redacted.",
+        "Returns recently observed network requests for an allowed tab, including failed requests (`error` set, no `statusCode`) and redirect hops (`redirectUrl` set). Credential header values (Authorization, Cookie, Set-Cookie, API-key/token/CSRF headers) are always redacted.",
       inputSchema: {
         tabId: z.number(),
         since: z.string().optional().describe("ISO 8601 timestamp; only entries at or after this time."),
         urlFilter: z.string().optional().describe("Case-insensitive substring match against the request URL."),
-        limit: z.number().optional().describe("Cap on the number of entries returned (most recent first)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Return only the most recent N matching entries. Entries are always ordered oldest first."),
       },
     },
     async ({ tabId, since, urlFilter, limit }) => {
       if (!tabRegistry.isAllowed(tabId)) {
         return errResult(new TabBridgeError("TAB_NOT_ALLOWED", `Tab ${tabId} is not on the allow-list.`, tabId));
+      }
+      if (!tabRegistry.getCaptureSettings().networkRequests) {
+        return errResult(
+          new TabBridgeError(
+            "CAPTURE_DISABLED",
+            "Network request capture is turned off in the Tab Bridge extension (Settings → Capture permissions), so nothing has been recorded. This does not mean the page made no requests.",
+            tabId
+          )
+        );
       }
       const entries = tabRegistry.getNetworkRequests(tabId, { since, urlFilter, limit });
       return ok({ tabId, entries });

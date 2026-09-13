@@ -55,6 +55,15 @@ describe("RingBuffer", () => {
     vi.useRealTimers();
   });
 
+  it("applies `filter` before `limit`", () => {
+    const buf = new RingBuffer<Entry>({ maxCount: 100, maxAgeMs: 1_000_000 });
+    for (let i = 0; i < 10; i++) {
+      buf.push({ timestamp: new Date().toISOString(), value: i });
+    }
+    const evens = buf.list({ filter: (e) => e.value % 2 === 0, limit: 2 });
+    expect(evens.map((e) => e.value)).toEqual([6, 8]);
+  });
+
   it("clear() empties the buffer", () => {
     const buf = new RingBuffer<Entry>({ maxCount: 10, maxAgeMs: 1_000_000 });
     buf.push({ timestamp: new Date().toISOString(), value: 1 });

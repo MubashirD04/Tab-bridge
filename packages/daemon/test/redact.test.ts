@@ -25,6 +25,13 @@ describe("redactHeaders", () => {
     }
   });
 
+  it("redacts proxy-auth, API-key, token and CSRF headers too", () => {
+    const names = ["Proxy-Authorization", "X-API-Key", "x-auth-token", "X-Access-Token", "X-CSRF-Token", "X-XSRF-TOKEN", "X-Amz-Security-Token"];
+    for (const name of names) {
+      expect(redactHeaders({ [name]: "super-secret-value" })[name]).toBe("[redacted]");
+    }
+  });
+
   it("handles missing/undefined headers gracefully", () => {
     expect(redactHeaders(undefined)).toEqual({});
     expect(redactHeaders({})).toEqual({});

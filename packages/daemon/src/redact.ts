@@ -2,9 +2,11 @@
  * Header redaction for captured network requests.
  *
  * Fixed default, no UI opt-out (see blueprint Section 5, Security): these
- * three header names are exactly the values that would be catastrophic to
- * have flow into a model's context or a log file, so this isn't
- * configurable the way the trusted-port list or the allow-list is.
+ * header names carry credentials that would be catastrophic to have flow
+ * into a model's context or a log file, so this isn't configurable the way
+ * the trusted-port list or the allow-list is. Beyond the core three
+ * (Authorization, Cookie, Set-Cookie), it covers the common proxy-auth,
+ * API-key, session-token and CSRF-token headers.
  *
  * Caveat, documented rather than silently overpromised: this only redacts
  * header *values*. A token sitting in a URL query string or in a request/
@@ -13,7 +15,18 @@
  * decision).
  */
 
-const REDACTED_HEADER_NAMES = new Set(["authorization", "cookie", "set-cookie"]);
+const REDACTED_HEADER_NAMES = new Set([
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "x-api-key",
+  "x-auth-token",
+  "x-access-token",
+  "x-csrf-token",
+  "x-xsrf-token",
+  "x-amz-security-token",
+]);
 const REDACTED_VALUE = "[redacted]";
 
 export function redactHeaders(

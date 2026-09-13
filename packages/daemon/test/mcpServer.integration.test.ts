@@ -89,7 +89,14 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
     const helloAck = new Promise<void>((resolve) => {
       fakeExtension.once("message", () => resolve()); // hello_ack
     });
-    fakeExtension.send(JSON.stringify({ type: "hello", token, browserSessionId: SESSION_ID }));
+    fakeExtension.send(
+      JSON.stringify({
+        type: "hello",
+        token,
+        browserSessionId: SESSION_ID,
+        capture: { consoleLogs: true, networkRequests: true },
+      })
+    );
     await helloAck;
 
     fakeExtension.on("message", (raw) => {
@@ -243,5 +250,71 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
 
     expect(result.data.entries[0].level).toBe("error");
     expect(result.data.entries[0].args[0]).toContain("TypeError");
+  });
+
+  it("returns CAPTURE_DISABLED (not an empty list) once capture is turned off, and drops what was captured", async () => {
+    fakeExtension.send(
+      JSON.stringify({
+        type: "console_log",
+        entry: { tabId: TAB_ID, timestamp: new Date().toISOString(), level: "log", args: ["before"] },
+      })
+    );
+    await waitFor(
+      async () =>
+        parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
+      (r) => r.data.entries?.length === 1
+    );
+
+    fakeExtension.send(
+      JSON.stringify({ type: "capture_settings_updated", capture: { consoleLogs: false, networkRequests: true } })
+    );
+    const disabled = await waitFor(
+      async () =>
+        parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
+      (r) => r.isError
+    );
+    expect(disabled.data.error.code).toBe("CAPTURE_DISABLED");
+
+    // Network capture is still on and unaffected.
+    const network = parseToolJson(
+      (await client.callTool({ name: "get_network_requests", arguments: { tabId: TAB_ID } })) as never
+    );
+    expect(network.isError).toBe(false);
+
+    fakeExtension.send(
+      JSON.stringify({ type: "capture_settings_updated", capture: { consoleLogs: true, networkRequests: true } })
+    );
+    const reenabled = await waitFor(
+      async () =>
+        parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
+      (r) => !r.isError
+    );
+    expect(reenabled.data.entries).toEqual([]);
+  });
+
+  it("applies level filters before limit", async () => {
+    const now = Date.now();
+    const send = (i: number, level: string) =>
+      fakeExtension.send(
+        JSON.stringify({
+          type: "console_log",
+          entry: { tabId: TAB_ID, timestamp: new Date(now + i).toISOString(), level, args: [`${level}-${i}`] },
+        })
+      );
+    send(0, "error");
+    for (let i = 1; i <= 5; i++) send(i, "log");
+    await waitFor(
+      async () =>
+        parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
+      (r) => r.data.entries?.length === 6
+    );
+
+    const result = parseToolJson(
+      (await client.callTool({
+        name: "get_console_logs",
+        arguments: { tabId: TAB_ID, levels: ["error"], limit: 2 },
+      })) as never
+    );
+    expect(result.data.entries.map((e: { args: string[] }) => e.args[0])).toEqual(["error-0"]);
   });
 });

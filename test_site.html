@@ -1,20 +1,51 @@
 <!DOCTYPE html>
-<!--[if lt IE 7]>      <html class="no-js lt-ie9 lt-ie8 lt-ie7"> <![endif]-->
-<!--[if IE 7]>         <html class="no-js lt-ie9 lt-ie8"> <![endif]-->
-<!--[if IE 8]>         <html class="no-js lt-ie9"> <![endif]-->
-<!--[if gt IE 8]>      <html class="no-js"> <!--<![endif]-->
 <html>
     <head>
         <meta charset="utf-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <title>Test Site</title>
-        <meta name="description" content="">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link rel="stylesheet" href="">
+        <script>
+            // Runs before the page finishes loading — only captured if the
+            // console hook was registered at document_start.
+            console.log("load-time log", { loadedAt: Date.now() });
+            console.warn("load-time warning");
+        </script>
     </head>
     <body style="background-color: aquamarine;">
         <h1>Test</h1>
-        <p>This is a test</p>
-        <script src="" async defer></script>
+        <p>This is a test.</p>
+
+        <!-- Failed resource load (kind: "resource") and a 404 network entry -->
+        <img src="does-not-exist.png" alt="missing image" width="1" height="1">
+
+        <button id="log-now">Log something now</button>
+
+        <script>
+            const circular = { name: "circular" };
+            circular.self = circular;
+            console.log("objects", circular, new Map([["key", "value"]]), [1, [2, [3, [4, [5]]]]]);
+            console.error("explicit console.error");
+
+            // Credential headers should come back redacted; X-Custom should not.
+            fetch("test_site.html?with-headers", {
+                headers: { "X-API-Key": "super-secret", "X-Custom": "keep-me" },
+            });
+
+            // Refused connection — should appear with `error` and no statusCode.
+            // (Not port 9 etc. — Firefox blocks those before webRequest sees them.)
+            fetch("http://127.0.0.1:59999/nothing-listening").catch(() => {});
+
+            // Unhandled promise rejection (kind: "unhandledrejection").
+            Promise.reject(new Error("test rejection"));
+
+            // Uncaught exception (kind: "uncaught") — keep this last.
+            setTimeout(() => {
+                throw new TypeError("test uncaught error");
+            }, 0);
+
+            document.getElementById("log-now").addEventListener("click", () => {
+                console.info("button clicked at", new Date().toISOString());
+            });
+        </script>
     </body>
 </html>

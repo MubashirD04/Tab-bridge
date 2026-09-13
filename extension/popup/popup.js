@@ -32,10 +32,27 @@ function buildTabRow(tab) {
 
   li.append(favicon, meta, button);
 
+  const showFailure = (result) => {
+    button.disabled = false;
+    button.textContent =
+      result?.reason === "not_connected"
+        ? "Not connected"
+        : result?.reason === "invalid_url"
+          ? "Invalid URL"
+          : tab.allowed
+            ? "Couldn't revoke"
+            : "Couldn't allow";
+    setTimeout(() => render(), 1500);
+  };
+
   button.addEventListener("click", async () => {
     button.disabled = true;
     if (tab.allowed) {
-      await browser.runtime.sendMessage({ type: "revoke_tab", tabId: tab.tabId });
+      const result = await browser.runtime.sendMessage({ type: "revoke_tab", tabId: tab.tabId });
+      if (!result?.ok) {
+        showFailure(result);
+        return;
+      }
       await render();
       return;
     }
@@ -46,10 +63,8 @@ function buildTabRow(tab) {
     // already has host access. background.js's allowTab() still does an
     // URL-sanity check; surface that specifically if it's what failed.
     const result = await browser.runtime.sendMessage({ type: "allow_tab", tabId: tab.tabId });
-    if (!result.ok) {
-      button.disabled = false;
-      button.textContent = result.reason === "invalid_url" ? "Invalid URL" : "Couldn't allow";
-      setTimeout(() => render(), 1500);
+    if (!result?.ok) {
+      showFailure(result);
       return;
     }
     await render();

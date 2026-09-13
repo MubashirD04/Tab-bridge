@@ -7,6 +7,7 @@ import type { Logger } from "./logger.js";
 import type { TabRegistry } from "./tabSessions.js";
 import { TabBridgeError } from "./types.js";
 import type {
+  CaptureSettings,
   DaemonToExtensionMessage,
   ExtensionToDaemonMessage,
   GetContentResponseMessage,
@@ -33,6 +34,11 @@ function sanitizeTrustedPorts(raw: unknown): TrustedDevPort[] {
     out.push({ port, protocol, label: typeof label === "string" && label.trim() ? label.trim() : `Port ${port}` });
   }
   return out;
+}
+
+function sanitizeCaptureSettings(raw: unknown): CaptureSettings {
+  const obj = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  return { consoleLogs: obj.consoleLogs === true, networkRequests: obj.networkRequests === true };
 }
 
 interface PendingRequest {
@@ -133,8 +139,14 @@ export class ExtensionBridge {
         this.socket.close(4002, "replaced by a new connection");
       }
       this.socket = ws;
+      // Same browser session → tab ids still refer to the same tabs, so
+      // captured logs can survive the reconnect (Firefox restarts the
+      // extension's background page often). A new session means a browser
+      // restart, where tab ids get reused for unrelated tabs.
+      const sameBrowserSession = this.browserSessionId === msg.browserSessionId;
       this.browserSessionId = msg.browserSessionId;
-      this.tabRegistry.resetAll();
+      this.tabRegistry.resetAll({ keepBuffers: sameBrowserSession });
+      this.tabRegistry.setCaptureSettings(sanitizeCaptureSettings(msg.capture));
       this.lastKnownTabs.clear();
 
       void this.allowlistStore.pruneExpired(msg.browserSessionId).then(() => {
@@ -161,6 +173,16 @@ export class ExtensionBridge {
       ws.on("close", () => {
         if (this.socket === ws) {
           this.socket = undefined;
+          // Any in-flight content/screenshot request was sent down this
+          // socket and will never be answered — fail it now rather than
+          // making the tool call sit out its full timeout.
+          for (const [requestId, pending] of this.pending) {
+            clearTimeout(pending.timer);
+            pending.reject(
+              new TabBridgeError("EXTENSION_DISCONNECTED", "The extension disconnected before responding.")
+            );
+            this.pending.delete(requestId);
+          }
         }
         void this.logger.log({ event: "extension_disconnected" });
       });
@@ -218,10 +240,15 @@ export class ExtensionBridge {
       }
       case "revoke_access": {
         const known = this.lastKnownTabs.get(msg.tabId);
-        if (known) {
-          void this.allowlistStore.revokeByOrigin(known.url);
-        }
         this.tabRegistry.remove(msg.tabId);
+        if (known) {
+          // A grant is origin-scoped, so revoking it has to drop every other
+          // open tab at that origin too — not just the one clicked. Tabs that
+          // still match some other way (a trusted port) are kept.
+          void this.allowlistStore.revokeByOrigin(known.url).then(() => {
+            this.reevaluateTabs((tabId) => tabId !== msg.tabId && this.tabRegistry.isAllowed(tabId));
+          });
+        }
         void this.logger.log({ event: "tab_revoked", tabId: msg.tabId });
         break;
       }
@@ -241,11 +268,35 @@ export class ExtensionBridge {
       case "set_trusted_ports": {
         const sanitized = sanitizeTrustedPorts(msg.ports);
         void this.allowlistStore.setTrustedPorts(sanitized).then(() => {
+          // Apply the new list to already-open tabs: a removed port stops
+          // being readable now, an added one starts without a reload.
+          this.reevaluateTabs(() => true);
           void this.logger.log({ event: "trusted_ports_updated", count: sanitized.length });
           this.send({ type: "trusted_ports_updated", trustedPorts: this.allowlistStore.getTrustedPorts() });
         });
         break;
       }
+      case "capture_settings_updated": {
+        this.tabRegistry.setCaptureSettings(sanitizeCaptureSettings(msg.capture));
+        void this.logger.log({ event: "capture_settings_updated", ...this.tabRegistry.getCaptureSettings() });
+        break;
+      }
+    }
+  }
+
+  /** Re-runs allow-list matching for last-known tabs selected by `which`. */
+  private reevaluateTabs(which: (tabId: number) => boolean): void {
+    if (!this.browserSessionId) return;
+    for (const [tabId, tab] of this.lastKnownTabs) {
+      if (!which(tabId)) continue;
+      this.tabRegistry.applyTabUpdate(
+        tabId,
+        tab.windowId,
+        tab.url,
+        tab.title,
+        this.allowlistStore,
+        this.browserSessionId
+      );
     }
   }
 

@@ -58,6 +58,10 @@ export interface ConsoleLogEntry {
    * it ever leaves the browser. */
   args: string[];
   stackTrace?: string;
+  /** Where the entry came from: a console.* call, an uncaught exception, an
+   * unhandled promise rejection, or a failed resource load (img/script/css).
+   * The last three are always level "error". */
+  kind?: "console" | "uncaught" | "unhandledrejection" | "resource";
 }
 
 export interface NetworkRequestEntry {
@@ -66,24 +70,42 @@ export interface NetworkRequestEntry {
   timestamp: string;
   method: string;
   url: string;
-  type: string; // "xhr" | "fetch" | "document" | ...
+  type: string; // Firefox's webRequest resource type: "main_frame" | "xmlhttprequest" (XHR and fetch) | "script" | ...
+  /** Absent when the request failed before a response (see `error`). */
   statusCode?: number;
-  /** Authorization/Cookie/Set-Cookie values are already replaced with
-   * "[redacted]" by the time this reaches the ring buffer — see redact.ts.
-   * This is a fixed, non-configurable default (see blueprint Security). */
+  /** Credential header values are already replaced with "[redacted]" by the
+   * time this reaches the ring buffer — see redact.ts. This is a fixed,
+   * non-configurable default (see blueprint Security). */
   requestHeaders: Record<string, string>;
   responseHeaders: Record<string, string>;
   timingMs?: number;
+  /** Firefox's network error string, e.g. "NS_ERROR_CONNECTION_REFUSED" — set
+   * for requests that failed (CORS, DNS, refused, blocked) instead of completing. */
+  error?: string;
+  /** Set on a redirect hop; the follow-up request is its own entry. */
+  redirectUrl?: string;
+  fromCache?: boolean;
 }
 
-// Matches the blueprint's documented error codes exactly (Section 3, API
-// Interface Definition) — a request timeout surfaces as CAPTURE_FAILED with
-// a distinguishing message rather than inventing a 6th code.
+/** The extension's opt-in capture toggles (Settings → Capture permissions),
+ * mirrored to the daemon so get_console_logs/get_network_requests can say
+ * "capture is off" instead of returning an empty list that reads as "no
+ * errors / no requests". */
+export interface CaptureSettings {
+  consoleLogs: boolean;
+  networkRequests: boolean;
+}
+
+// Matches the blueprint's documented error codes (Section 3, API Interface
+// Definition) — a request timeout surfaces as CAPTURE_FAILED with a
+// distinguishing message rather than inventing a new code. CAPTURE_DISABLED
+// was added alongside the opt-in capture permissions.
 export type ErrorCode =
   | "TAB_NOT_ALLOWED"
   | "TAB_NOT_FOUND"
   | "EXTENSION_DISCONNECTED"
   | "CAPTURE_FAILED"
+  | "CAPTURE_DISABLED"
   | "UNAUTHORIZED";
 
 export class TabBridgeError extends Error {
@@ -117,6 +139,15 @@ export interface HelloMessage {
   type: "hello";
   token: string;
   browserSessionId: string;
+  /** Missing is treated as both toggles off. */
+  capture?: CaptureSettings;
+}
+
+/** Sent whenever the user flips a capture toggle while connected; a later
+ * reconnect carries the current values in `hello` instead. */
+export interface CaptureSettingsUpdatedMessage {
+  type: "capture_settings_updated";
+  capture: CaptureSettings;
 }
 
 export interface HelloAckMessage {
@@ -229,7 +260,8 @@ export type ExtensionToDaemonMessage =
   | NetworkRequestMessage
   | GetContentResponseMessage
   | ScreenshotResponseMessage
-  | SetTrustedPortsMessage;
+  | SetTrustedPortsMessage
+  | CaptureSettingsUpdatedMessage;
 
 export type DaemonToExtensionMessage =
   | HelloAckMessage

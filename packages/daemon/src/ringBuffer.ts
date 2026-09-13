@@ -34,8 +34,10 @@ export class RingBuffer<T extends TimestampedEntry> {
   }
 
   /** Returns entries, newest last, optionally filtered to those at or after
-   * `since` and capped to the most recent `limit`. */
-  list(options?: { since?: string; limit?: number }): T[] {
+   * `since` and matching `filter`, then capped to the most recent `limit`.
+   * Filtering happens before the cap, so `limit: 10` with a filter means "the
+   * last 10 matching entries", not "whichever of the last 10 entries match". */
+  list(options?: { since?: string; limit?: number; filter?: (entry: T) => boolean }): T[] {
     this.evict();
     let result = this.entries;
     if (options?.since) {
@@ -43,6 +45,9 @@ export class RingBuffer<T extends TimestampedEntry> {
       if (!Number.isNaN(sinceTime)) {
         result = result.filter((e) => Date.parse(e.timestamp) >= sinceTime);
       }
+    }
+    if (options?.filter) {
+      result = result.filter(options.filter);
     }
     if (options?.limit !== undefined && result.length > options.limit) {
       result = result.slice(result.length - options.limit);

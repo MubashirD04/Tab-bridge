@@ -126,6 +126,34 @@ async function loadSettings() {
   captureNetworkRequests = Boolean(stored.captureNetworkRequests);
 }
 
+// Kicked off immediately, not just from connect(), so capture listeners that
+// fire right after this event page wakes up can wait for the real toggle
+// values instead of treating capture as off until storage has been read.
+const settingsReady = loadSettings();
+let settingsLoaded = false;
+void settingsReady.then(() => {
+  settingsLoaded = true;
+});
+
+// trustedPorts/grantedOrigins are empty in a freshly woken script until
+// hello_ack arrives. A console hook asking "is capture on for me?" at
+// document_start in that window would wrongly be told no, so give the
+// handshake a short while to land first.
+const ALLOW_STATE_WAIT_MS = 3000;
+let allowStateKnown = false;
+let allowStateWaiters = [];
+
+function waitForAllowState() {
+  if (allowStateKnown) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ALLOW_STATE_WAIT_MS);
+    allowStateWaiters.push(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 async function getBrowserSessionId() {
   // browser.storage.session is cleared by Firefox itself when the browser
   // closes. That's the actual mechanism behind "a manual grant lasts until
@@ -177,7 +205,7 @@ async function connect() {
   ws.addEventListener("open", async () => {
     if (socket !== ws) return;
     browserSessionId = await getBrowserSessionId();
-    sendRaw({ type: "hello", token: pairingToken, browserSessionId });
+    sendRaw({ type: "hello", token: pairingToken, browserSessionId, capture: currentCaptureSettings() });
   });
 
   ws.addEventListener("message", (event) => {
@@ -232,13 +260,42 @@ function sendRaw(message) {
   }
 }
 
+// Console/network entries produced while the socket is down (e.g. during the
+// few seconds a reconnect takes) are held here instead of dropped, and
+// flushed once the daemon has the tab list again — see resyncAllTabs(). This
+// only helps while this script stays alive; a killed event page loses them.
+const MAX_QUEUED_CAPTURE_MESSAGES = 500;
+let queuedCaptureMessages = [];
+
+function sendCapture(message) {
+  if (connectionState === "connected" && socket?.readyState === WebSocket.OPEN) {
+    sendRaw(message);
+    return;
+  }
+  queuedCaptureMessages.push(message);
+  if (queuedCaptureMessages.length > MAX_QUEUED_CAPTURE_MESSAGES) queuedCaptureMessages.shift();
+}
+
+function flushQueuedCaptureMessages() {
+  const queued = queuedCaptureMessages;
+  queuedCaptureMessages = [];
+  for (const message of queued) sendRaw(message);
+}
+
+function currentCaptureSettings() {
+  return { consoleLogs: captureConsoleLogs, networkRequests: captureNetworkRequests };
+}
+
 async function handleDaemonMessage(msg) {
   switch (msg.type) {
     case "hello_ack": {
       connectionState = "connected";
       trustedPorts = msg.trustedPorts || [];
       grantedOrigins = new Set(msg.grantedOrigins || []);
+      allowStateKnown = true;
+      for (const notify of allowStateWaiters.splice(0)) notify();
       updateBadge();
+      void updateEarlyCaptureRegistration();
       await resyncAllTabs();
       break;
     }
@@ -252,6 +309,9 @@ async function handleDaemonMessage(msg) {
     }
     case "trusted_ports_updated": {
       trustedPorts = msg.trustedPorts || [];
+      // The daemon re-checks open tabs against the new list; mirror that.
+      void syncAllTabsAllowState();
+      void updateEarlyCaptureRegistration();
       if (pendingTrustedPortsUpdate) {
         clearTimeout(pendingTrustedPortsUpdate.timer);
         pendingTrustedPortsUpdate.resolve({ ok: true, trustedPorts });
@@ -266,32 +326,64 @@ async function handleDaemonMessage(msg) {
 
 async function resyncAllTabs() {
   const tabs = await browser.tabs.query({});
-  for (const tab of tabs) {
-    reportTab(tab);
-    // A reconnect means this script context is a fresh reload — allowedTabIds
-    // came back empty, so a trusted-port or manually-granted tab that was
-    // already open (and thus won't fire a fresh tabs.onUpdated "complete"
-    // event) would otherwise stay locally un-allowed, silently failing
-    // get_page_content/screenshot_tab with "tab_closed" until it next
-    // navigates, even though the daemon (which just rebuilt its own
-    // tabRegistry from the reportTab calls above, and reported grantedOrigins
-    // in hello_ack) still lists it via list_allowed_tabs. Re-checking here
-    // mirrors the onUpdated listener below for tabs that were never new.
-    if (tab.id !== undefined && shouldAutoAllow(tab.url) && !allowedTabIds.has(tab.id)) {
-      allowedTabIds.add(tab.id);
-      await ensureCapturePipeline(tab.id);
-    }
-  }
+  // Report every tab first, synchronously, so the daemon has rebuilt its
+  // sessions before any queued console/network entries reach it (it drops
+  // entries for tabs it doesn't consider allowed).
+  for (const tab of tabs) reportTab(tab);
+  flushQueuedCaptureMessages();
+  // A reconnect may mean this script context is a fresh reload with an empty
+  // allowedTabIds, and already-open tabs won't fire a new onUpdated event —
+  // so re-derive local allow state (and injection) for all of them here.
+  await Promise.all(tabs.map(syncTabAllowState));
+}
+
+function isTrackableTab(tab) {
+  if (!tab.url || tab.incognito) return false; // never track private-browsing tabs
+  return /^https?:/.test(tab.url); // skip about:, file:, moz-extension:, etc.
 }
 
 function reportTab(tab) {
-  if (!tab.url || tab.incognito) return; // never track private-browsing tabs
-  if (!/^https?:/.test(tab.url)) return; // skip about:, file:, moz-extension:, etc.
+  if (!isTrackableTab(tab)) return;
   sendRaw({ type: "tab_updated", tabId: tab.id, windowId: tab.windowId, url: tab.url, title: tab.title || tab.url });
 }
 
-browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-  if (changeInfo.status === "complete" || changeInfo.url) reportTab(tab);
+/** Brings one tab's local allow state in line with what the daemon would
+ * decide (trusted port or granted origin — see shouldAutoAllow()), in both
+ * directions: a tab that navigates away from an allowed origin stops being
+ * captured, not just one that newly matches. Injects the capture pipeline
+ * once the tab's document has finished loading. */
+async function syncTabAllowState(tab) {
+  if (tab.id === undefined) return;
+  if (!isTrackableTab(tab) || !shouldAutoAllow(tab.url)) {
+    if (allowedTabIds.delete(tab.id)) pushCaptureState(tab.id); // detach its console hook
+    return;
+  }
+  allowedTabIds.add(tab.id);
+  if (tab.status === "complete") await ensureCapturePipeline(tab.id);
+}
+
+async function syncAllTabsAllowState(exceptTabId) {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.filter((t) => t.id !== exceptTabId).map(syncTabAllowState));
+}
+
+browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === "loading") {
+    // A reload or cross-document navigation discards everything injected
+    // into the old document. Without forgetting it here, the capture
+    // pipeline would never be re-injected — console capture (and
+    // get_page_content) silently stopped after a tab's first reload, which
+    // Live Server triggers on every save. Re-injecting into a document that
+    // still has the scripts is harmless: both guard against running twice.
+    contentScriptInjected.delete(tabId);
+    consoleHookInjected.delete(tabId);
+  }
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    reportTab(tab);
+    await syncTabAllowState(tab);
+  } else if (changeInfo.title) {
+    reportTab(tab); // keeps list_allowed_tabs titles current for single-page apps
+  }
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
@@ -299,6 +391,9 @@ browser.tabs.onRemoved.addListener((tabId) => {
   allowedTabIds.delete(tabId);
   contentScriptInjected.delete(tabId);
   consoleHookInjected.delete(tabId);
+  for (const [requestId, pending] of pendingNetworkRequests) {
+    if (pending.tabId === tabId) pendingNetworkRequests.delete(requestId);
+  }
 });
 
 // ---- capture pipeline (only ever injected into allowed tabs) ----
@@ -317,9 +412,9 @@ async function ensureCapturePipeline(tabId) {
     }
   }
   // console-hook.js is only injected when the user has opted into console
-  // capture (see captureConsoleLogs) — gated again at the relay listener
-  // below so toggling the setting off takes effect immediately even for a
-  // tab where the hook is already running.
+  // capture (see captureConsoleLogs). It may already be there from the
+  // document_start registration (see updateEarlyCaptureRegistration()), in
+  // which case this is a no-op guarded inside the script itself.
   if (captureConsoleLogs && !consoleHookInjected.has(tabId)) {
     consoleHookInjected.add(tabId);
     try {
@@ -329,6 +424,81 @@ async function ensureCapturePipeline(tabId) {
       console.warn("Tab Bridge: console hook injection failed", err);
     }
   }
+  pushCaptureState(tabId);
+}
+
+/** Tells a tab's content script (and through it, the console hook) whether
+ * console capture is active for it right now. An inactive hook restores the
+ * page's original console methods, so a page stops paying for capture as
+ * soon as it's switched off or the tab stops being allowed. */
+function pushCaptureState(tabId) {
+  const consoleLogs = captureConsoleLogs && allowedTabIds.has(tabId);
+  browser.tabs.sendMessage(tabId, { type: "capture_state", consoleLogs }).catch(() => {
+    // No content script in that tab — nothing to tell.
+  });
+}
+
+// ---- document_start registration, so logs/errors during page load are caught ----
+
+const EARLY_CAPTURE_SCRIPT_IDS = ["tab-bridge-early-content-script", "tab-bridge-early-console-hook"];
+let registrationChain = Promise.resolve();
+
+/** Match patterns can't express ports, so these are host-wide: a trusted
+ * port on localhost registers for every localhost page. That's why the hook
+ * starts out holding entries back and asks before sending anything — see
+ * getCaptureStateFor(). */
+function earlyCaptureMatchPatterns() {
+  const patterns = new Set();
+  for (const origin of grantedOrigins) {
+    try {
+      const url = new URL(origin);
+      patterns.add(`${url.protocol}//${url.hostname}/*`);
+    } catch {
+      // not a parseable origin — nothing to register
+    }
+  }
+  for (const p of trustedPorts) {
+    patterns.add(`${p.protocol}://127.0.0.1/*`);
+    patterns.add(`${p.protocol}://localhost/*`);
+  }
+  return Array.from(patterns);
+}
+
+/** Re-registers the document_start scripts for the current allow-list and
+ * console toggle. Serialized, since unregister+register isn't atomic. */
+function updateEarlyCaptureRegistration() {
+  registrationChain = registrationChain.then(async () => {
+    try {
+      const existing = await browser.scripting.getRegisteredContentScripts({ ids: EARLY_CAPTURE_SCRIPT_IDS });
+      if (existing.length > 0) {
+        await browser.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
+      }
+      const matches = earlyCaptureMatchPatterns();
+      if (!captureConsoleLogs || matches.length === 0) return;
+      await browser.scripting.registerContentScripts([
+        {
+          id: EARLY_CAPTURE_SCRIPT_IDS[0],
+          js: ["content-script.js"],
+          matches,
+          runAt: "document_start",
+          persistAcrossSessions: false,
+        },
+        {
+          id: EARLY_CAPTURE_SCRIPT_IDS[1],
+          js: ["console-hook.js"],
+          matches,
+          runAt: "document_start",
+          world: "MAIN",
+          persistAcrossSessions: false,
+        },
+      ]);
+    } catch (err) {
+      // Capture still works without this, just from page load completion on
+      // (ensureCapturePipeline()).
+      console.warn("Tab Bridge: couldn't register document_start capture scripts", err);
+    }
+  });
+  return registrationChain;
 }
 
 async function handleContentRequest(msg) {
@@ -338,7 +508,17 @@ async function handleContentRequest(msg) {
   }
   try {
     await ensureCapturePipeline(msg.tabId);
-    const response = await browser.tabs.sendMessage(msg.tabId, { type: "read_content", mode: msg.mode });
+    let response;
+    try {
+      response = await browser.tabs.sendMessage(msg.tabId, { type: "read_content", mode: msg.mode });
+    } catch (err) {
+      if (!isNoReceiverError(err)) throw err;
+      // The content script is gone even though we believed it injected (a
+      // navigation we didn't see as "loading") — re-inject once and retry.
+      contentScriptInjected.delete(msg.tabId);
+      await ensureCapturePipeline(msg.tabId);
+      response = await browser.tabs.sendMessage(msg.tabId, { type: "read_content", mode: msg.mode });
+    }
     if (response?.error) {
       sendRaw({ type: "get_content_response", requestId: msg.requestId, tabId: msg.tabId, error: response.error });
     } else {
@@ -400,77 +580,167 @@ function isTabGoneError(err) {
   return /no tab with id|invalid tab id/i.test(message);
 }
 
+function isNoReceiverError(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  return /receiving end does not exist|could not establish connection/i.test(message);
+}
+
 // ---- console log relay (from content-script.js, which relays MAIN-world console-hook.js) ----
 
-browser.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type !== "console_log_relay") return undefined;
-  if (!captureConsoleLogs) return undefined; // opt-in permission — see options page
+/** A URL-only allow decision, for moments when allowedTabIds may not have
+ * caught up yet (a new document at document_start, a main-frame request). */
+function isUrlAllowed(url, incognito) {
+  return isTrackableTab({ url, incognito }) && shouldAutoAllow(url);
+}
+
+async function getCaptureStateFor(sender) {
+  await settingsReady;
+  await waitForAllowState();
+  const tab = sender.tab;
+  if (!captureConsoleLogs || !tab || tab.id === undefined || sender.frameId !== 0) return { consoleLogs: false };
+  // Judge by the document's own URL: at document_start the tab may not have
+  // reported its navigation yet, so allowedTabIds can be stale either way.
+  if (!isUrlAllowed(sender.url, tab.incognito)) return { consoleLogs: false };
+  if (!allowedTabIds.has(tab.id)) {
+    allowedTabIds.add(tab.id);
+    sendRaw({ type: "tab_updated", tabId: tab.id, windowId: tab.windowId, url: sender.url, title: tab.title || sender.url });
+  }
+  return { consoleLogs: true };
+}
+
+// Hook timestamps come from the page; fall back to now if one is implausible.
+function hookTimestamp(time) {
+  const now = Date.now();
+  return new Date(Number.isFinite(time) && Math.abs(now - time) < 10 * 60_000 ? time : now).toISOString();
+}
+
+async function relayConsoleBatch(entries, sender) {
+  await settingsReady;
+  if (!captureConsoleLogs || !Array.isArray(entries)) return; // opt-in permission — see options page
   const tabId = sender.tab?.id;
-  if (tabId === undefined || !allowedTabIds.has(tabId)) return undefined; // extension-side allow check too
-  sendRaw({
-    type: "console_log",
-    entry: {
-      tabId,
-      timestamp: new Date().toISOString(),
-      level: message.level,
-      args: message.args,
-      stackTrace: message.stackTrace,
-    },
-  });
+  if (tabId === undefined || sender.frameId !== 0 || !allowedTabIds.has(tabId)) return; // extension-side allow check too
+  for (const e of entries) {
+    sendCapture({
+      type: "console_log",
+      entry: {
+        tabId,
+        timestamp: hookTimestamp(e.time),
+        level: e.level,
+        kind: e.kind,
+        args: e.args,
+        stackTrace: e.stackTrace,
+      },
+    });
+  }
+}
+
+browser.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === "capture_state_request") return getCaptureStateFor(sender);
+  if (message?.type === "console_log_batch") void relayConsoleBatch(message.entries, sender);
   return undefined;
 });
 
 // ---- network request capture (observe-only; no "blocking", so no elevated permission needed) ----
 
+const MAX_PENDING_NETWORK_REQUESTS = 1000;
+
+function shouldCaptureRequest(details) {
+  if (!captureNetworkRequests) return false; // opt-in permission — see options page
+  // A top-level navigation belongs to the page it's loading, not the one the
+  // tab is leaving, so judge it by its own URL.
+  if (details.type === "main_frame") return isUrlAllowed(details.url, details.incognito);
+  return allowedTabIds.has(details.tabId);
+}
+
+// These handlers must record synchronously. Firefox can deliver a fast
+// request's start and finish events back to back without running promise
+// callbacks in between, so an `await` here let onCompleted/onErrorOccurred
+// run before the request was recorded — quick 404s, WebSocket upgrades and
+// refused connections silently went missing. Deferring is only acceptable
+// in the brief window before settings have loaded after a wake-up.
+function startNetworkRequest(details) {
+  if (!shouldCaptureRequest(details)) return;
+  if (pendingNetworkRequests.size >= MAX_PENDING_NETWORK_REQUESTS) {
+    // Oldest first (Map keeps insertion order) — requests that never finished.
+    pendingNetworkRequests.delete(pendingNetworkRequests.keys().next().value);
+  }
+  pendingNetworkRequests.set(details.requestId, {
+    tabId: details.tabId,
+    requestId: details.requestId,
+    method: details.method,
+    url: details.url,
+    type: details.type,
+    requestHeaders: {},
+    startedAt: details.timeStamp,
+  });
+}
+
+function recordRequestHeaders(details) {
+  const pending = pendingNetworkRequests.get(details.requestId);
+  if (pending) pending.requestHeaders = headersToObject(details.requestHeaders);
+}
+
+// onBeforeRequest rather than onBeforeSendHeaders: requests served from cache
+// never send headers, but still start and complete.
+browser.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (settingsLoaded) startNetworkRequest(details);
+    else void settingsReady.then(() => startNetworkRequest(details));
+  },
+  { urls: ["<all_urls>"] }
+);
+
 browser.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
-    if (!captureNetworkRequests) return; // opt-in permission — see options page
-    if (!allowedTabIds.has(details.tabId)) return;
-    pendingNetworkRequests.set(details.requestId, {
-      tabId: details.tabId,
-      requestId: details.requestId,
-      timestamp: new Date().toISOString(),
-      method: details.method,
-      url: details.url,
-      type: details.type,
-      requestHeaders: headersToObject(details.requestHeaders),
-      startedAt: Date.now(),
-    });
+    if (settingsLoaded) recordRequestHeaders(details);
+    else void settingsReady.then(() => recordRequestHeaders(details));
   },
   { urls: ["<all_urls>"] },
   ["requestHeaders"]
 );
 
+function finishNetworkRequest(details, extra) {
+  const pending = pendingNetworkRequests.get(details.requestId);
+  if (!pending) return;
+  pendingNetworkRequests.delete(details.requestId);
+  if (!shouldCaptureRequest(details)) return;
+  sendCapture({
+    type: "network_request",
+    entry: {
+      tabId: pending.tabId,
+      requestId: pending.requestId,
+      timestamp: new Date(pending.startedAt).toISOString(),
+      method: pending.method,
+      url: pending.url,
+      type: pending.type,
+      requestHeaders: pending.requestHeaders,
+      responseHeaders: headersToObject(details.responseHeaders),
+      timingMs: Math.max(0, Math.round(details.timeStamp - pending.startedAt)),
+      ...extra,
+    },
+  });
+}
+
 browser.webRequest.onCompleted.addListener(
-  (details) => {
-    const pending = pendingNetworkRequests.get(details.requestId);
-    if (!pending) return;
-    pendingNetworkRequests.delete(details.requestId);
-    if (!captureNetworkRequests) return; // opt-in permission — see options page
-    if (!allowedTabIds.has(details.tabId)) return;
-    sendRaw({
-      type: "network_request",
-      entry: {
-        tabId: pending.tabId,
-        requestId: pending.requestId,
-        timestamp: pending.timestamp,
-        method: pending.method,
-        url: pending.url,
-        type: pending.type,
-        statusCode: details.statusCode,
-        requestHeaders: pending.requestHeaders,
-        responseHeaders: headersToObject(details.responseHeaders),
-        timingMs: Date.now() - pending.startedAt,
-      },
-    });
-  },
+  (details) => finishNetworkRequest(details, { statusCode: details.statusCode, fromCache: details.fromCache }),
   { urls: ["<all_urls>"] },
   ["responseHeaders"]
 );
 
-browser.webRequest.onErrorOccurred.addListener((details) => pendingNetworkRequests.delete(details.requestId), {
-  urls: ["<all_urls>"],
-});
+// Each redirect hop is its own entry; the follow-up request fires
+// onBeforeRequest again under the same requestId.
+browser.webRequest.onBeforeRedirect.addListener(
+  (details) => finishNetworkRequest(details, { statusCode: details.statusCode, redirectUrl: details.redirectUrl }),
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);
+
+// Failed requests (CORS, DNS, refused connections, blocked) are often the
+// ones worth seeing, so they're recorded rather than dropped.
+browser.webRequest.onErrorOccurred.addListener(
+  (details) => finishNetworkRequest(details, { error: details.error }),
+  { urls: ["<all_urls>"] }
+);
 
 function headersToObject(headers) {
   const out = {};
@@ -478,7 +748,7 @@ function headersToObject(headers) {
     out[h.name] = h.value ?? "";
   }
   return out;
-  // Note: redaction of Authorization/Cookie/Set-Cookie happens daemon-side
+  // Note: redaction of credential headers (Authorization, Cookie, ...) happens daemon-side
   // (redact.ts), unconditionally, before these ever land in a ring buffer —
   // see the blueprint's Security section. The extension sends raw headers
   // over the already-token-authed localhost WebSocket; nothing here leaves
@@ -540,15 +810,23 @@ async function saveCaptureSettings(newCaptureConsoleLogs, newCaptureNetworkReque
   });
   captureConsoleLogs = Boolean(newCaptureConsoleLogs);
   captureNetworkRequests = Boolean(newCaptureNetworkRequests);
-  // Retroactively inject console-hook.js into already-allowed tabs so
-  // turning the setting on takes effect immediately, without needing a
-  // reload. Turning it off is enforced at the relay listener instead (see
-  // above) — the hook itself is harmless left running, since nothing
-  // downstream of it forwards data once the flag is false.
+  // Don't let entries captured before a toggle was turned off reach the
+  // daemon later via the reconnect queue.
+  queuedCaptureMessages = queuedCaptureMessages.filter(
+    (m) => (m.type === "console_log" && captureConsoleLogs) || (m.type === "network_request" && captureNetworkRequests)
+  );
+  // The daemon uses this to report "capture is off" from its tools and to
+  // discard already-captured data for a toggle that was turned off. If we're
+  // not connected, the next hello carries the current values instead.
+  sendRaw({ type: "capture_settings_updated", capture: currentCaptureSettings() });
+  await updateEarlyCaptureRegistration();
+  // Turning console capture on injects the hook into already-allowed tabs
+  // right away (no reload needed); turning it off tells every hook to detach.
   if (captureConsoleLogs) {
-    for (const tabId of allowedTabIds) {
-      await ensureCapturePipeline(tabId);
-    }
+    await Promise.all(Array.from(allowedTabIds, (tabId) => ensureCapturePipeline(tabId)));
+  } else {
+    for (const tabId of contentScriptInjected) pushCaptureState(tabId);
+    consoleHookInjected.clear(); // a detached hook re-attaches on the next injection
   }
   return { ok: true };
 }
@@ -575,27 +853,55 @@ async function getStatus() {
 }
 
 async function allowTab(tabId) {
+  // Grants and revokes live on the daemon; sending one while disconnected
+  // would be silently dropped while the popup claimed success.
+  if (connectionState !== "connected") return { ok: false, reason: "not_connected" };
   const tab = await browser.tabs.get(tabId);
   // host_permissions grants <all_urls> unconditionally at install (needed
   // for tabs.captureTab — see manifest.json) — every origin already has host
   // access, so there's nothing left to request/confirm here the way there
   // was back when only 127.0.0.1/localhost were pre-granted. This is just an
   // URL-sanity check now.
+  let origin;
   try {
-    new URL(tab.url);
+    origin = new URL(tab.url).origin;
   } catch {
     return { ok: false, reason: "invalid_url" };
   }
+  if (!isTrackableTab(tab)) return { ok: false, reason: "invalid_url" };
 
-  allowedTabIds.add(tabId);
   sendRaw({ type: "grant_access", tabId, url: tab.url, label: tab.title });
-  await ensureCapturePipeline(tabId);
+  // The daemon grants the whole origin, so every open tab at it is allowed,
+  // not only this one.
+  grantedOrigins.add(origin);
+  void updateEarlyCaptureRegistration();
+  await syncAllTabsAllowState();
   return { ok: true };
 }
 
 async function revokeTab(tabId) {
+  if (connectionState !== "connected") return { ok: false, reason: "not_connected" };
+  let tab;
+  try {
+    tab = await browser.tabs.get(tabId);
+  } catch {
+    // Tab already gone — onRemoved has cleaned up after it.
+  }
   allowedTabIds.delete(tabId);
   sendRaw({ type: "revoke_access", tabId });
+  pushCaptureState(tabId);
+  if (tab?.url) {
+    // Mirrors the daemon: the origin's grant goes away for every tab at it;
+    // other tabs still allowed via a trusted port stay allowed. The revoked
+    // tab itself stays un-allowed until its next navigation, as on the daemon.
+    try {
+      grantedOrigins.delete(new URL(tab.url).origin);
+    } catch {
+      // not a parseable URL — nothing was granted for it
+    }
+    void updateEarlyCaptureRegistration();
+    await syncAllTabsAllowState(tabId);
+  }
   return { ok: true };
 }
 
@@ -612,10 +918,10 @@ async function saveSettings(newPort, newToken) {
   return { ok: true };
 }
 
-// ---- also mark a tab allowed locally the moment it matches the daemon's
-// trusted-port list (as reported in hello_ack), so the UI and console/
-// network capture activate immediately for Live-Server tabs without a
-// manual click or a round trip per navigation. Mirrors allowlist.ts's
+// ---- local allow matching, used by syncTabAllowState(): a tab is allowed
+// locally the moment it matches the daemon's trusted-port list or a granted
+// origin (as reported in hello_ack), so the UI and console/network capture
+// activate immediately without a round trip per navigation. Mirrors allowlist.ts's
 // matchTrustedPort() exactly; the daemon remains the actual authority for
 // every MCP tool call regardless of what the extension believes locally. ----
 function matchesTrustedPort(rawUrl) {
@@ -649,13 +955,5 @@ function matchesGrantedOrigin(rawUrl) {
 function shouldAutoAllow(rawUrl) {
   return matchesTrustedPort(rawUrl) || matchesGrantedOrigin(rawUrl);
 }
-
-browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab.url) return;
-  if (shouldAutoAllow(tab.url) && !allowedTabIds.has(tabId)) {
-    allowedTabIds.add(tabId);
-    await ensureCapturePipeline(tabId);
-  }
-});
 
 connect();
