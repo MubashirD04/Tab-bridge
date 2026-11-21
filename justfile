@@ -4,17 +4,24 @@ set shell := ["bash", "-uc"]
 default:
     @just --list
 
-# Install workspace deps, build, and link the `sharepane` CLI onto PATH
+# Install dependencies and build
 install:
     npm install
     npm run build
-    cd packages/daemon && npm link
 
-# Build all workspace packages
+# Build the CLI bundle (also refreshes the plugin's copy)
 build:
     npm run build
 
-# Typecheck all workspace packages
+# Point Firefox and Claude at your local build
+setup: build
+    node packages/daemon/dist/sharepane.mjs setup
+
+# Check every piece of a local install
+doctor:
+    node packages/daemon/dist/sharepane.mjs doctor
+
+# Typecheck the helper
 typecheck:
     npm run typecheck
 
@@ -26,10 +33,11 @@ test:
 lint:
     npm run lint:extension
 
-# Everything CONTRIBUTING.md asks for before opening a PR
-check: typecheck test lint
+# Everything CI checks
+check: typecheck test lint build
+    node scripts/version.mjs check
+    node scripts/check-plugin.mjs plugins/sharepane
 
-# Undo `just install`: remove the global CLI link and all build/dep output
-uninstall:
-    cd packages/daemon && npm uninstall --global tab-bridge-daemon || true
-    rm -rf packages/*/dist node_modules packages/*/node_modules
+# Remove build output and dependencies
+clean:
+    rm -rf packages/daemon/dist node_modules packages/*/node_modules

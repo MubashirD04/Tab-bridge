@@ -6,11 +6,12 @@ description: Use when the user wants Claude to look at a page open in their Fire
 # Sharepane
 
 Sharepane lets you read Firefox tabs the user has chosen to share. Everything
-is read-only and local. The user controls which tabs are shared, from the
-Sharepane toolbar icon (**Share with Claude**); tabs on a trusted local
-dev-server port (VS Code Live Server's 5500 by default) are shared
-automatically. You can't share a tab yourself, and shouldn't try to work
-around that.
+is read-only. Sharepane itself runs on the user's computer, but what you read
+becomes part of this conversation, so don't describe it as staying local. The
+user controls which tabs are shared, from the Sharepane toolbar icon
+(**Share with Claude**); tabs on a trusted local dev-server port (5500 and
+5501, VS Code Live Server's, by default) are shared automatically. You can't
+share a tab yourself, and shouldn't try to work around that.
 
 ## Using the tools
 
@@ -22,8 +23,8 @@ around that.
 - Start with `get_page_content` (`mode: "text"` for what the user reads,
   `"html"` for structure and styling questions). Use `screenshot_tab` for
   anything visual: layout, alignment, colours, overflow.
-- `get_console_logs` and `get_network_requests` only contain activity
-  captured since Firefox started (or since capture was turned on). If the
+- `get_console_logs` and `get_network_requests` only hold the last 5 minutes
+  (up to 500 entries per tab) of activity since capture was turned on. If the
   user asks about something that happened earlier and you find nothing, say
   so and ask them to reproduce it, rather than reporting "no errors".
 
