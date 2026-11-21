@@ -30,7 +30,6 @@
   };
 
   const trustedPorts = [
-    { port: 5000, protocol: "http", label: "Flask / Vite preview" },
     { port: 5500, protocol: "http", label: "VS Code Live Server" },
     { port: 5501, protocol: "https", label: "VS Code Live Server (HTTPS)" },
   ];
