@@ -5,7 +5,7 @@
 //
 // Writes it twice: dist/ for the npm package, and the Claude Code plugin's
 // bin/ so the plugin needs no install step.
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -38,6 +38,10 @@ await build({
   },
 });
 
+// Executable, so `npx sharepane` works from inside this repo too (npm marks
+// bins executable on install, but the workspace link points at this file).
+await chmod(outfile, 0o755);
 await mkdir(path.dirname(pluginCopy), { recursive: true });
 await copyFile(outfile, pluginCopy);
+await chmod(pluginCopy, 0o755);
 console.log(`built ${path.relative(process.cwd(), outfile)} and ${path.relative(process.cwd(), pluginCopy)}`);
