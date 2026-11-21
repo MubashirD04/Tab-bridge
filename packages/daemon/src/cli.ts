@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ConfigStore } from "./config.js";
-import { HostAlreadyRunningError, runHost } from "./host.js";
+import { HostAlreadyRunningError, HostStartupError, runHost } from "./host.js";
 import { buildMcpProxy } from "./mcpProxy.js";
 import {
   defaultSetupEnv,
@@ -30,7 +30,7 @@ async function host(): Promise<void> {
   try {
     running = await runHost({ input: process.stdin, output: process.stdout });
   } catch (err) {
-    if (err instanceof HostAlreadyRunningError) {
+    if (err instanceof HostAlreadyRunningError || err instanceof HostStartupError) {
       // Give the host_error message a moment to flush before exiting.
       process.stdout.end(() => process.exit(0));
       return;

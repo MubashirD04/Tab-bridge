@@ -23224,6 +23224,13 @@ var HostAlreadyRunningError = class extends Error {
     this.name = "HostAlreadyRunningError";
   }
 };
+var HostStartupError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HostStartupError";
+  }
+};
+var MAX_SOCKET_PATH_BYTES = process.platform === "linux" ? 107 : 103;
 function socketIsLive(socketPath) {
   return new Promise((resolve) => {
     const probe = net2.createConnection(socketPath);
@@ -23284,13 +23291,25 @@ async function runHost(options) {
       socket.destroy();
     });
   });
+  const failStartup = (reason) => {
+    const message = `Sharepane's helper couldn't start: ${reason}`;
+    sendToExtension({ type: "host_error", code: "STARTUP_FAILED", message });
+    void logger.log({ event: "host_startup_failed", message });
+    throw new HostStartupError(message);
+  };
+  const pathBytes = Buffer.byteLength(socketPath);
+  if (pathBytes > MAX_SOCKET_PATH_BYTES) {
+    failStartup(
+      `the path to its socket is too long (${pathBytes} bytes; this system allows ${MAX_SOCKET_PATH_BYTES}): ${socketPath}`
+    );
+  }
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, () => {
       server.off("error", reject);
       resolve();
     });
-  });
+  }).catch((err) => failStartup(`couldn't open ${socketPath} (${err.message}).`));
   await chmod(socketPath, 384);
   void logger.log({ event: "host_started", pid: process.pid, socketPath });
   let closing;
@@ -23782,7 +23801,7 @@ async function host() {
   try {
     running = await runHost({ input: process.stdin, output: process.stdout });
   } catch (err) {
-    if (err instanceof HostAlreadyRunningError) {
+    if (err instanceof HostAlreadyRunningError || err instanceof HostStartupError) {
       process.stdout.end(() => process.exit(0));
       return;
     }

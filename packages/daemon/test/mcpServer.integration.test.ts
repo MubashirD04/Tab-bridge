@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runHost, type RunningHost } from "../src/host.js";
+import { HostStartupError, runHost, type RunningHost } from "../src/host.js";
 import { SocketClientTransport } from "../src/socketClient.js";
 import { attachToHostStreams, type FakeExtension } from "./helpers/fakeExtension.js";
 
@@ -106,6 +106,17 @@ describe("Sharepane — native host + MCP over Unix socket, end to end", () => {
       /already serving/
     );
     expect(await told).toMatchObject({ type: "host_error", code: "ANOTHER_INSTANCE" });
+  });
+
+  it("tells its extension why, instead of crashing, when the socket path is too long", async () => {
+    // macOS allows 103 bytes in a socket path; a deep home folder can exceed it.
+    const deepDir = path.join(tmpDir, "x".repeat(120));
+    const other = attachToHostStreams();
+    const told = other.fake.nextMessage();
+    await expect(runHost({ input: other.input, output: other.output, configDir: deepDir })).rejects.toThrow(
+      HostStartupError
+    );
+    expect(await told).toMatchObject({ type: "host_error", code: "STARTUP_FAILED", message: expect.stringMatching(/too long/) });
   });
 
   it("reports when Firefox closes the connection", async () => {

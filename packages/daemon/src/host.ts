@@ -33,6 +33,19 @@ export class HostAlreadyRunningError extends Error {
   }
 }
 
+/** The host couldn't open its socket. It has already told the extension
+ * why (a host_error message); the caller should just exit. */
+export class HostStartupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostStartupError";
+  }
+}
+
+/** Unix socket paths are limited by sockaddr_un.sun_path: 104 bytes on
+ * macOS and the BSDs, 108 on Linux, including the terminating NUL. */
+export const MAX_SOCKET_PATH_BYTES = process.platform === "linux" ? 107 : 103;
+
 /** True if something is accepting connections on the socket right now. */
 function socketIsLive(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -115,13 +128,27 @@ export async function runHost(options: HostOptions): Promise<RunningHost> {
       socket.destroy();
     });
   });
+  // Without this, a failure here crashes the host and the extension can only
+  // say "the helper stopped unexpectedly", over and over.
+  const failStartup = (reason: string): never => {
+    const message = `Sharepane's helper couldn't start: ${reason}`;
+    sendToExtension({ type: "host_error", code: "STARTUP_FAILED", message });
+    void logger.log({ event: "host_startup_failed", message });
+    throw new HostStartupError(message);
+  };
+  const pathBytes = Buffer.byteLength(socketPath);
+  if (pathBytes > MAX_SOCKET_PATH_BYTES) {
+    failStartup(
+      `the path to its socket is too long (${pathBytes} bytes; this system allows ${MAX_SOCKET_PATH_BYTES}): ${socketPath}`
+    );
+  }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, () => {
       server.off("error", reject);
       resolve();
     });
-  });
+  }).catch((err: Error) => failStartup(`couldn't open ${socketPath} (${err.message}).`));
   await chmod(socketPath, 0o600);
   void logger.log({ event: "host_started", pid: process.pid, socketPath });
 
