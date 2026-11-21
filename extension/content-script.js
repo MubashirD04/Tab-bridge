@@ -12,11 +12,11 @@
 // it answers capture_state_request and re-checks the allow-list on every
 // batch it receives.
 (() => {
-  if (window.__tabBridgeContentScriptLoaded) return;
-  window.__tabBridgeContentScriptLoaded = true;
+  if (window.__sharepaneContentScriptLoaded) return;
+  window.__sharepaneContentScriptLoaded = true;
 
-  const FROM_HOOK_EVENT = "tab-bridge:console";
-  const TO_HOOK_EVENT = "tab-bridge:control";
+  const FROM_HOOK_EVENT = "sharepane:console";
+  const TO_HOOK_EVENT = "sharepane:control";
   const MAX_CONTENT_CHARS = 500_000;
   const MAX_DETAIL_CHARS = 64_000;
   const MAX_ARGS = 10;

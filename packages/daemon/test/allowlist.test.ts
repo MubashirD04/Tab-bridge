@@ -10,7 +10,7 @@ let configStore: ConfigStore;
 let store: AllowlistStore;
 
 beforeEach(async () => {
-  tmpDir = await mkdtemp(path.join(os.tmpdir(), "tab-bridge-test-"));
+  tmpDir = await mkdtemp(path.join(os.tmpdir(), "sharepane-test-"));
   configStore = new ConfigStore(tmpDir);
   store = new AllowlistStore(configStore);
   await store.load();

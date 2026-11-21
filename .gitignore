@@ -4,6 +4,8 @@ dist/
 .DS_Store
 web-ext-artifacts/
 coverage/
-.tab-bridge/
+.sharepane/
 .mcp.json
 .claude/
+web-ext-package/
+!plugins/sharepane/.mcp.json

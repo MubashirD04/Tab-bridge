@@ -1,4 +1,4 @@
-# Tab Bridge
+# Sharepane
 
 Lets Claude Code (or Claude Desktop) read the HTML, console logs, network
 requests, and screenshots of specific Firefox tabs you explicitly allow —
@@ -15,7 +15,7 @@ off by default until you opt in per-tab. Full details in
 Firefox extension  <-- WebSocket, token-authed -->  daemon  <-- MCP -- Claude Code / Desktop
 ```
 
-One local process (`tab-bridge start`) talks to the extension and to your
+One local process (`sharepane start`) talks to the extension and to your
 MCP client.
 
 ## Setup
@@ -23,8 +23,8 @@ MCP client.
 **1. Build and start the daemon**
 
 ```bash
-just install     # npm install + build + link `tab-bridge` onto PATH
-tab-bridge start # prints a port and pairing token
+just install     # npm install + build + link `sharepane` onto PATH
+sharepane start # prints a port and pairing token
 ```
 
 **2. Load the extension in Firefox**
@@ -38,8 +38,8 @@ Not signed/published yet, so load it temporarily:
 
 **3. Point your MCP client at the daemon**
 
-Claude Code: run `tab-bridge start` from your project root — it writes the
-`tab-bridge` entry into `.mcp.json` for you automatically.
+Claude Code: run `sharepane start` from your project root — it writes the
+`sharepane` entry into `.mcp.json` for you automatically.
 
 Claude Desktop: add an entry to `claude_desktop_config.json` pointing at
 `packages/mcp-stdio/dist/index.js` with the token/URL as env vars. See
@@ -47,7 +47,7 @@ Claude Desktop: add an entry to `claude_desktop_config.json` pointing at
 
 **4. Allow a tab**
 
-Open the site, click the Tab Bridge icon, hit **Allow**. Tabs on a trusted
+Open the site, click the Sharepane icon, hit **Allow**. Tabs on a trusted
 local dev port (e.g. VS Code Live Server on `127.0.0.1:5500`) are allowed
 automatically. Then just ask Claude about it.
 
@@ -72,7 +72,7 @@ See [DETAILS.md](DETAILS.md) for test coverage notes, and
 - [TRUST.md](TRUST.md) — the full trust/permissions story
 - [SETUP.md](SETUP.md) — detailed setup, on-demand daemon usage, troubleshooting
 - [DETAILS.md](DETAILS.md) — allow-listing internals, capture permission internals, tool schemas, test coverage
-- [tab-bridge-blueprint.md](tab-bridge-blueprint.md) — design reasoning behind these defaults
+- [sharepane-blueprint.md](sharepane-blueprint.md) — design reasoning behind these defaults
 - [Roadmap](DETAILS.md#roadmap)
 
 ## License

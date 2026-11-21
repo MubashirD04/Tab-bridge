@@ -26,7 +26,7 @@ export class Logger {
   async log(evt: LogEvent): Promise<void> {
     const line = JSON.stringify({ timestamp: new Date().toISOString(), ...evt });
     // eslint-disable-next-line no-console
-    console.error(`[tab-bridge] ${line}`);
+    console.error(`[sharepane] ${line}`);
     await this.ready;
     try {
       await appendFile(this.logPath, line + "\n", "utf-8");

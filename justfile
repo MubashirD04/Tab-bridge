@@ -4,7 +4,7 @@ set shell := ["bash", "-uc"]
 default:
     @just --list
 
-# Install workspace deps, build, and link the `tab-bridge` CLI onto PATH
+# Install workspace deps, build, and link the `sharepane` CLI onto PATH
 install:
     npm install
     npm run build

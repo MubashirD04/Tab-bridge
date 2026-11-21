@@ -1,20 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "Tab Bridge",
-  "version": "0.1.0",
-  "description": "Lets Claude read tabs you explicitly allow, or any tab on your local dev server (e.g. VS Code Live Server) — nothing else, and nothing ever leaves your machine.",
+  "name": "Sharepane",
+  "version": "0.2.0",
+  "description": "Lets Claude read Firefox tabs you explicitly allow, or tabs on your local dev server \u2014 nothing else, and nothing ever leaves your machine.",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
   },
   "background": {
-    "scripts": ["background.js"],
+    "scripts": [
+      "background.js"
+    ],
     "type": "module"
   },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": "icons/icon.svg",
-    "default_title": "Tab Bridge"
+    "default_title": "Sharepane"
   },
   "options_ui": {
     "page": "options/options.html",
@@ -25,24 +27,28 @@
     "storage",
     "scripting",
     "webRequest",
-    "alarms"
+    "nativeMessaging"
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  },
   "host_permissions": [
     "http://127.0.0.1/*",
     "http://localhost/*",
     "https://127.0.0.1/*",
-    "https://localhost/*",
+    "https://localhost/*"
+  ],
+  "optional_host_permissions": [
     "<all_urls>"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "browser_specific_settings": {
     "gecko": {
-      "id": "tab-bridge@tab-bridge.dev",
+      "id": "sharepane@sharepane.dev",
       "strict_min_version": "128.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }

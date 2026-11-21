@@ -1,4 +1,4 @@
-# Tab Bridge — Technical Blueprint
+# Sharepane — Technical Blueprint
 
 **One-line summary:** A local daemon + Firefox extension that lets Claude (Code, primarily, or Desktop for a quick look) read the HTML, console logs, network requests, and screenshots of specific browser tabs you've explicitly allowed — plus auto-approves any tab pointed at your local VS Code Live Server — with everything staying on your own machine, and designed from the start to be safe for other people to run too.
 
@@ -25,10 +25,10 @@
 | Component | Responsibility | Why it exists for this idea |
 |---|---|---|
 | **Firefox extension** (background script, content scripts, popup/options UI) | Tracks open tabs, lets you toggle "allow Claude to view this tab," injects a content script into allowed tabs to read DOM/console, captures screenshots via `tabs.captureTab` | Firefox has no equivalent to the Claude-in-Chrome extension, and this is the only way to get in-page access (DOM, console, screenshots) from inside Firefox at all |
-| **Tab Bridge Daemon** (Node/TypeScript, runs on your machine) | Long-running local process; is *both* the WebSocket server the extension talks to *and* the MCP server exposed over `http`; owns the allow-list, the Live-Server auto-detect logic, and bounded in-memory buffers of captured data | Decouples "is an MCP client open" from "is the extension connected" — the extension always has a stable local endpoint, and any client just points at it |
-| **`tab-bridge mcp-stdio` shim** (thin Node process) | A tiny stdio-based MCP server that Claude Desktop launches as a subprocess (Desktop's config only supports `command`-based stdio servers); on startup it connects to the already-running daemon over its `http` endpoint using the pairing token and simply forwards each tool call/response between stdio and the daemon | Exists purely because Desktop can't speak `http` to a local server directly — it's a translation layer, not a second implementation of the tools. Same allow-list, same daemon, same source of truth |
+| **Sharepane Daemon** (Node/TypeScript, runs on your machine) | Long-running local process; is *both* the WebSocket server the extension talks to *and* the MCP server exposed over `http`; owns the allow-list, the Live-Server auto-detect logic, and bounded in-memory buffers of captured data | Decouples "is an MCP client open" from "is the extension connected" — the extension always has a stable local endpoint, and any client just points at it |
+| **`sharepane mcp-stdio` shim** (thin Node process) | A tiny stdio-based MCP server that Claude Desktop launches as a subprocess (Desktop's config only supports `command`-based stdio servers); on startup it connects to the already-running daemon over its `http` endpoint using the pairing token and simply forwards each tool call/response between stdio and the daemon | Exists purely because Desktop can't speak `http` to a local server directly — it's a translation layer, not a second implementation of the tools. Same allow-list, same daemon, same source of truth |
 | **Claude Code** (primary MCP client) | Calls MCP tools directly against the daemon's `http` endpoint | Runs locally, supports `http` transport, so it hits `127.0.0.1` with no relay and no shim needed |
-| **Claude Desktop** (secondary, "quick look" MCP client) | Launches `tab-bridge mcp-stdio` as a subprocess per its config; talks stdio MCP to that shim | For a quick check outside your terminal — same tools, same permissions, just a different transport hop |
+| **Claude Desktop** (secondary, "quick look" MCP client) | Launches `sharepane mcp-stdio` as a subprocess per its config; talks stdio MCP to that shim | For a quick check outside your terminal — same tools, same permissions, just a different transport hop |
 
 Everything binds to `127.0.0.1` only. Nothing in this design talks to the public internet or to Cowork/cloud sessions — that's a deliberate boundary, not an oversight (see Security, below).
 
@@ -36,7 +36,7 @@ Everything binds to `127.0.0.1` only. Nothing in this design talks to the public
 
 Scenario: you're editing a page served by VS Code Live Server, and you've also manually allow-listed a staging tab, then ask Claude Code to figure out why a button is misaligned.
 
-1. You open `http://127.0.0.1:5500/index.html` in Firefox (served by Live Server) and separately click "Allow Claude to view this tab" in the Tab Bridge popup for a second tab, `https://staging.myapp.com`.
+1. You open `http://127.0.0.1:5500/index.html` in Firefox (served by Live Server) and separately click "Allow Claude to view this tab" in the Sharepane popup for a second tab, `https://staging.myapp.com`.
 2. The extension's background script notices the `5500` tab's URL matches a trusted dev port and marks it `source: "live-server-auto"` — no manual click needed for that one. It sends a `tab_connected` event over the WebSocket to the daemon for both tabs.
 3. The daemon updates its in-memory `TabSession` map. The Live-Server tab isn't written to `allowlist.json` (it's derived from the trusted-port list, not a manual grant); the staging tab is.
 4. In Claude Code, you ask: "why is the submit button misaligned on my Live Server tab?"
@@ -48,9 +48,9 @@ Scenario: you're editing a page served by VS Code Live Server, and you've also m
 10. The daemon wraps the HTML in the tool response and returns it to Claude Code over the MCP HTTP response.
 11. Claude spots a suspicious class name and calls `screenshot_tab({ tabId })` to confirm visually before proposing anything.
 12. The daemon asks the background script to run `browser.tabs.captureTab(tabId)`, gets back a PNG, and returns it as base64.
-13. Claude proposes a CSS fix in your editor. Nothing is written back into the browser automatically — Tab Bridge is read-only in this design; it observes tabs, it doesn't control them.
+13. Claude proposes a CSS fix in your editor. Nothing is written back into the browser automatically — Sharepane is read-only in this design; it observes tabs, it doesn't control them.
 
-If you'd instead asked from Claude Desktop for a quick look, steps 5-10 are identical except the call leaves Desktop as stdio, hits the `tab-bridge mcp-stdio` shim process, and that shim forwards it to the same daemon `http` endpoint using the same pairing token — same allow-list, same answer, one extra hop.
+If you'd instead asked from Claude Desktop for a quick look, steps 5-10 are identical except the call leaves Desktop as stdio, hits the `sharepane mcp-stdio` shim process, and that shim forwards it to the same daemon `http` endpoint using the same pairing token — same allow-list, same answer, one extra hop.
 
 ### Diagram
 
@@ -62,9 +62,9 @@ flowchart LR
         POPUP["Popup / options UI"]
     end
     subgraph LOCAL["Your machine — 127.0.0.1 only"]
-        DAEMON["Tab Bridge Daemon<br/>(Node/TS)"]
+        DAEMON["Sharepane Daemon<br/>(Node/TS)"]
         STORE[("allowlist.json +<br/>in-memory ring buffers")]
-        SHIM["tab-bridge mcp-stdio<br/>(shim process)"]
+        SHIM["sharepane mcp-stdio<br/>(shim process)"]
     end
     CC["Claude Code<br/>(http, direct)"]
     CD["Claude Desktop<br/>(stdio, via shim)"]
@@ -84,7 +84,7 @@ flowchart LR
 
 ### Storage engine
 
-No database — this is a single-user local tool with bounded, ephemeral state. The daemon keeps everything in memory and persists only the allow-list and trusted-port config to a small JSON file (`~/.tab-bridge/config.json`). A relational or document store would be pure overhead here.
+No database — this is a single-user local tool with bounded, ephemeral state. The daemon keeps everything in memory and persists only the allow-list and trusted-port config to a small JSON file (`~/.sharepane/config.json`). A relational or document store would be pure overhead here.
 
 ### Entities (entity-relationship overview)
 
@@ -108,7 +108,7 @@ You asked whether console/network logs should be persisted. The recommendation i
 
 The in-memory ring buffers already cover the common case — "what just happened in the last few minutes on this tab" survives fine without touching disk, because a daemon restart is a relatively rare event in normal use. What persisting *would* buy you is continuity across a daemon crash/restart, or the ability to export a debugging session to attach to a bug report. But these buffers are also the most sensitive data in the whole system: `Authorization`/`Cookie` header redaction only covers header *names* — it does nothing for a token sitting in a URL query string (`?api_key=...`) or in a request/response body, both of which network entries can legitimately contain. Writing that to disk by default, indefinitely, is a meaningfully bigger promise than "lives in RAM until the process exits," especially once this is something other people install and point at their own staging/auth-bearing tabs. For an open-source tool whose entire pitch rests on "this only sees what you explicitly let it see, and doesn't keep it," silently writing captured page data to disk would undercut that pitch.
 
-So: default stays ephemeral, matching the rest of the privacy posture (session-only grants, redaction, no self-expanding access). For the real need — surviving a restart, or exporting a bug report — add an **explicit opt-in "recording" mode**, separate from "allow": a `tab-bridge record --tab <id>` command (or a popup toggle, clearly distinguished from "allow") streams that tab's ring buffer to `~/.tab-bridge/recordings/<tabId>-<timestamp>.jsonl`, with the same header redaction applied and a best-effort (not guaranteed — flag this honestly in the UI) regex pass for obviously token-shaped query-string values. Recordings auto-delete after 7 days unless you explicitly export them, so opting in once doesn't quietly turn into an ever-growing pile of old debug data on disk. This is the same pattern as the read-only tool surface: the safer behavior is the default, and the more powerful/riskier behavior requires your deliberate action every time.
+So: default stays ephemeral, matching the rest of the privacy posture (session-only grants, redaction, no self-expanding access). For the real need — surviving a restart, or exporting a bug report — add an **explicit opt-in "recording" mode**, separate from "allow": a `sharepane record --tab <id>` command (or a popup toggle, clearly distinguished from "allow") streams that tab's ring buffer to `~/.sharepane/recordings/<tabId>-<timestamp>.jsonl`, with the same header redaction applied and a best-effort (not guaranteed — flag this honestly in the UI) regex pass for obviously token-shaped query-string values. Recordings auto-delete after 7 days unless you explicitly export them, so opting in once doesn't quietly turn into an ever-growing pile of old debug data on disk. This is the same pattern as the read-only tool surface: the safer behavior is the default, and the more powerful/riskier behavior requires your deliberate action every time.
 
 ---
 
@@ -121,10 +121,10 @@ This isn't a REST/GraphQL API for external clients — the clients are MCP clien
 ```json
 {
   "mcpServers": {
-    "tab-bridge": {
+    "sharepane": {
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp",
-      "headers": { "Authorization": "Bearer ${TAB_BRIDGE_TOKEN}" }
+      "headers": { "Authorization": "Bearer ${SHAREPANE_TOKEN}" }
     }
   }
 }
@@ -135,10 +135,10 @@ Claude Desktop's local MCP support is stdio-only (confirmed via research — its
 ```json
 {
   "mcpServers": {
-    "tab-bridge": {
+    "sharepane": {
       "command": "npx",
-      "args": ["tab-bridge", "mcp-stdio"],
-      "env": { "TAB_BRIDGE_TOKEN": "..." }
+      "args": ["sharepane", "mcp-stdio"],
+      "env": { "SHAREPANE_TOKEN": "..." }
     }
   }
 }
@@ -258,8 +258,8 @@ Prioritized by what actually breaks quietly and expensively here — which, for 
 
 No paging, no dashboards — single user, single machine, nothing to alert *someone else* about. What's actually useful:
 
-- **Structured local log file** (`~/.tab-bridge/daemon.log`, rotated): connection/auth events (extension connected/disconnected, pairing token used/rejected), every MCP tool call logged as `{tool, tabId, timestamp, ok/error}` — deliberately *not* logging the captured content itself (page HTML, screenshots) into this file, to avoid the log becoming its own sensitive-data sink.
-- **A `get_tab_status` style check** (could be a CLI command, `tab-bridge status`, or folded into `list_allowed_tabs`'s response as a `daemonHealthy`/`extensionConnected` flag) — this is the practical answer to "is this working right now," which is the only observability question that actually matters at this scale.
+- **Structured local log file** (`~/.sharepane/daemon.log`, rotated): connection/auth events (extension connected/disconnected, pairing token used/rejected), every MCP tool call logged as `{tool, tabId, timestamp, ok/error}` — deliberately *not* logging the captured content itself (page HTML, screenshots) into this file, to avoid the log becoming its own sensitive-data sink.
+- **A `get_tab_status` style check** (could be a CLI command, `sharepane status`, or folded into `list_allowed_tabs`'s response as a `daemonHealthy`/`extensionConnected` flag) — this is the practical answer to "is this working right now," which is the only observability question that actually matters at this scale.
 - **Verifying the latency targets from Section 4:** not worth automated alerting for a personal tool — if `screenshot_tab` starts taking 10 seconds instead of 2, you'll notice immediately because you're the one waiting on it.
 
 ---
@@ -269,7 +269,7 @@ No paging, no dashboards — single user, single machine, nothing to alert *some
 1. **Daemon core** — config/pairing-token generation, `allowlist.json`/`config.json` persistence, WebSocket server for the extension protocol, trusted-port matching logic, unit tests for allow-list and port matching (this phase's tests land now, not later).
 2. **Extension skeleton** — manifest, background script that connects to the daemon over WebSocket with the pairing token, popup UI listing open tabs with an allow/revoke toggle, options page for pairing and editing the trusted-port list. Manual check: toggling "allow" on a tab shows up as a `TabSession` on the daemon side.
 3. **Capture pipeline** — content-script injection into allowed tabs for `get_page_content` (HTML/text), `browser.tabs.captureTab` for screenshots, a `console.*` hook in the content script that reports up to the daemon, and a `webRequest` listener scoped to allowed tab IDs for network capture with header redaction applied at capture time (not as an afterthought).
-4. **MCP tool layer, both transports** — implement all five tools over streamable-http, wire them to the daemon's in-memory state, enforce the token on the MCP endpoint, register in `.mcp.json`, and run the first real query from Claude Code against a genuinely open, allowed tab. Build the `tab-bridge mcp-stdio` shim in the same phase (it's a thin forwarder against tools that already exist by this point) and verify the identical query works from Claude Desktop. This is the phase where the primary journey from Section 1 becomes real end-to-end, including its smoke test, for both clients.
+4. **MCP tool layer, both transports** — implement all five tools over streamable-http, wire them to the daemon's in-memory state, enforce the token on the MCP endpoint, register in `.mcp.json`, and run the first real query from Claude Code against a genuinely open, allowed tab. Build the `sharepane mcp-stdio` shim in the same phase (it's a thin forwarder against tools that already exist by this point) and verify the identical query works from Claude Desktop. This is the phase where the primary journey from Section 1 becomes real end-to-end, including its smoke test, for both clients.
 5. **Live-Server auto-approval** — verify a Live-Server tab (default port and a custom port) gets auto-approved with no manual click, and that an explicit revoke still overrides it.
 6. **Hardening** — token rotation, ring-buffer eviction under load (a chatty console/network tab), the `EXTENSION_DISCONNECTED`/`TAB_NOT_FOUND` error-path tests, structured logging to file, and the opt-in recording mode from Section 2 (deliberately built after the ephemeral default is solid, not before).
 7. **Open-source packaging** — `LICENSE`, README leading with the trust story (Section 6), `CONTRIBUTING`, `web-ext sign` for the extension, publish the npm package, first tagged release via the CI workflow from Section 8. This is the phase that turns "works on my machine" into "installable by a stranger."

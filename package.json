@@ -1,5 +1,5 @@
 {
-  "name": "tab-bridge-monorepo",
+  "name": "sharepane-monorepo",
   "private": true,
   "version": "0.1.0",
   "workspaces": [

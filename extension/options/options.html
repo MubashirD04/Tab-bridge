@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Tab Bridge — Settings</title>
+    <title>Sharepane — Settings</title>
     <style>
       body {
         max-width: 560px;
@@ -133,33 +133,13 @@
     </style>
   </head>
   <body>
-    <h1>Tab Bridge — Settings</h1>
+    <h1>Sharepane — Settings</h1>
 
     <div class="trust-note">
-      Tab Bridge never sends anything anywhere except <code>127.0.0.1</code> on this machine. It only reads tabs you
+      Sharepane never sends anything off this machine: it talks only to a local helper that Firefox starts itself. It only reads tabs you
       explicitly allow, or tabs on a trusted local dev port — nothing else, and nothing is written to disk unless
       you turn on the (separate, opt-in) recording feature.
     </div>
-
-    <form id="settings-form">
-      <div class="field">
-        <label for="daemon-port">Daemon port</label>
-        <input type="number" id="daemon-port" value="8765" />
-        <div class="hint">Matches the port the <code>tab-bridge start</code> daemon printed on startup.</div>
-      </div>
-
-      <div class="field">
-        <label for="pairing-token">Pairing token</label>
-        <input type="text" id="pairing-token" placeholder="paste from ~/.tab-bridge/config.json" />
-        <div class="hint">
-          Run <code>tab-bridge start</code> once to generate it, then copy the <code>token</code> field from
-          <code>~/.tab-bridge/config.json</code> here.
-        </div>
-      </div>
-
-      <button type="submit">Save &amp; reconnect</button>
-      <span id="save-status"></span>
-    </form>
 
     <h2>Capture permissions</h2>
     <p class="hint">
@@ -172,6 +152,13 @@
     </div>
     <div class="field checkbox-field">
       <label><input type="checkbox" id="capture-network-requests" /> Allow network request capture</label>
+    </div>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="capture-screenshots" /> Allow screenshots</label>
+      <div class="hint">
+        Firefox only lets an extension take screenshots once it has access to all websites, so turning this on
+        asks Firefox for that. Sharepane still only ever reads tabs you allow; turning it off hands the access back.
+      </div>
     </div>
     <span id="capture-status"></span>
 

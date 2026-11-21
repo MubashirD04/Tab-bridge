@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tab-bridge": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/tab-bridge.mjs", "mcp"]
+    }
+  }
+}

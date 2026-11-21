@@ -2,36 +2,67 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Tab Bridge</title>
+    <title>Sharepane</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
-      <span class="title">Tab Bridge</span>
-      <span id="status" class="status status--disconnected">checking…</span>
+      <span class="title">Sharepane</span>
+      <span id="status" class="status" data-state="connecting">checking…</span>
     </header>
 
-    <div id="unpaired" class="notice" hidden>
-      Not paired with a daemon yet. <a href="#" id="open-options">Open settings</a> to paste in the pairing token
-      from <code>~/.tab-bridge/config.json</code>.
+    <div id="host-missing" class="notice notice--error" hidden>
+      Sharepane's helper isn't installed yet. <a href="#" id="open-onboarding">Open the setup guide</a>. It's one
+      command.
     </div>
+    <div id="host-error" class="notice notice--error" hidden></div>
+    <div id="host-restarting" class="notice" hidden>The Sharepane helper stopped unexpectedly. Restarting it…</div>
 
-    <div id="unauthorized" class="notice notice--error" hidden>
-      The daemon rejected the pairing token. <a href="#" id="open-options-unauthorized">Open settings</a> and
-      re-check it against what <code>tab-bridge status</code> prints.
-    </div>
+    <section class="current" aria-labelledby="current-title">
+      <div class="page">
+        <img id="current-favicon" class="favicon" alt="" />
+        <div class="page-meta">
+          <div id="current-title" class="page-title">This tab</div>
+          <div id="current-host" class="page-host"></div>
+        </div>
+      </div>
 
-    <div id="unreachable" class="notice" hidden>
-      Can't reach a daemon on port <span id="unreachable-port"></span>. Run <code>tab-bridge start</code> in a
-      terminal, or check the port in <a href="#" id="open-options-unreachable">Settings</a>.
-    </div>
+      <label class="switch-row switch-row--primary">
+        <span class="switch-label">Share with Claude</span>
+        <input type="checkbox" role="switch" id="share-switch" />
+      </label>
+      <p id="share-hint" class="hint"></p>
+    </section>
 
-    <ul id="tab-list" class="tab-list"></ul>
+    <section class="capture" aria-labelledby="capture-heading">
+      <h2 id="capture-heading">Claude can also see, on shared tabs</h2>
+      <label class="switch-row">
+        <span class="switch-label">Console logs</span>
+        <input type="checkbox" role="switch" id="capture-console" />
+      </label>
+      <label class="switch-row">
+        <span class="switch-label">Network requests</span>
+        <input type="checkbox" role="switch" id="capture-network" />
+      </label>
+      <label class="switch-row">
+        <span class="switch-label">
+          Screenshots
+          <span class="sub">Firefox requires access to all sites for this</span>
+        </span>
+        <input type="checkbox" role="switch" id="capture-screenshots" />
+      </label>
+    </section>
+
+    <section id="others" class="others" aria-labelledby="others-heading" hidden>
+      <h2 id="others-heading">Also shared</h2>
+      <ul id="others-list"></ul>
+    </section>
 
     <footer>
       <a href="#" id="open-options-footer">Settings</a>
-      <span class="hint">Only tabs you allow here, or on a trusted local dev port, are ever readable.</span>
+      <a href="#" id="open-onboarding-footer">Setup guide</a>
     </footer>
+
+    <script src="popup.js"></script>
   </body>
-  <script src="popup.js"></script>
 </html>

@@ -34,6 +34,6 @@ permissions and that deserves a straight answer.
   content/screenshot access on its own. See
   [DETAILS.md § Capture permissions](DETAILS.md#capture-permissions).
 
-The full design reasoning lives in `tab-bridge-blueprint.md` at the repo
+The full design reasoning lives in `sharepane-blueprint.md` at the repo
 root — this covers *what* the defaults are; that doc covers *why* each one
 was chosen.

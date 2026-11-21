@@ -56,7 +56,7 @@ capture was off — see [Capture permissions](#capture-permissions).
 block (plus a small text block with `width`/`height`/`capturedAt`) — that's
 what makes it something Claude actually *sees*, not just bytes it's
 holding; a JSON blob with a base64 string buried inside it wouldn't render
-as a picture to the model at all. See `tab-bridge-blueprint.md` Section 3
+as a picture to the model at all. See `sharepane-blueprint.md` Section 3
 for exact input/output shapes and the standard error format
 (`TAB_NOT_ALLOWED`, `TAB_NOT_FOUND`, `EXTENSION_DISCONNECTED`,
 `CAPTURE_FAILED`, `CAPTURE_DISABLED`, `UNAUTHORIZED`).
@@ -69,7 +69,7 @@ just typecheck   # tsc --noEmit across the daemon and shim
 just test        # vitest — unit + integration tests, no real browser needed
 just lint        # web-ext lint against extension/
 # or just `just check` to run all three
-just uninstall   # removes the global `tab-bridge` link and cleans build output
+just uninstall   # removes the global `sharepane` link and cleans build output
 ```
 
 The MCP integration tests spin up a real daemon and a real `ws` WebSocket

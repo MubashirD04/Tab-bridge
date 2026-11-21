@@ -1,26 +1,39 @@
 {
-  "name": "tab-bridge-daemon",
-  "version": "0.1.0",
-  "description": "Local daemon: owns the tab allow-list and exposes it to MCP clients (Claude Code, via the mcp-stdio shim to Claude Desktop) and to the Tab Bridge Firefox extension.",
+  "name": "sharepane",
+  "version": "0.2.0",
+  "description": "Let Claude read the Firefox tabs you choose: page HTML, screenshots, console logs and network requests. Local only.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "tab-bridge": "./dist/cli.js"
+    "sharepane": "dist/sharepane.mjs"
   },
-  "main": "./dist/index.js",
-  "exports": {
-    ".": "./dist/index.js"
+  "files": [
+    "dist/sharepane.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
   },
+  "keywords": [
+    "mcp",
+    "claude",
+    "firefox",
+    "model-context-protocol",
+    "devtools"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node build.mjs",
+    "prepack": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "ws": "^8.18.0",
+    "esbuild": "^0.25.10",
     "zod": "^3.23.8"
   },
-  "devDependencies": {
-    "@types/ws": "^8.5.13"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MubashirD04/Tab-bridge.git",
+    "directory": "packages/daemon"
   }
 }

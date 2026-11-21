@@ -1,7 +1,7 @@
-# Contributing to Tab Bridge
+# Contributing to Sharepane
 
 Thanks for considering it. This is a small, personal-scale open-source tool
-(see `tab-bridge-blueprint.md` for the full design reasoning), so the bar
+(see `sharepane-blueprint.md` for the full design reasoning), so the bar
 here is "reasonable and tested," not "enterprise process."
 
 ## Getting set up
@@ -13,7 +13,7 @@ just check
 
 (`just check` runs `typecheck`, `test`, and `lint:extension` — the same
 three individual recipes are available on their own, plus `just build` and
-`just uninstall` to remove the global `tab-bridge` link and clean build
+`just uninstall` to remove the global `sharepane` link and clean build
 output. Run `just` with no arguments to list all recipes, or use the
 underlying npm commands directly: `npm install`, `npm run typecheck`,
 `npm test`, `npm run lint:extension`.)
@@ -51,7 +51,7 @@ Small, focused commits with a plain-English summary of *why*, not just
 
 ## Reporting a security issue
 
-If you find something that would let Tab Bridge read a tab it shouldn't, or
+If you find something that would let Sharepane read a tab it shouldn't, or
 leak captured data somewhere it shouldn't go, please open an issue — there's
 no dedicated security contact yet since this is a small personal project,
 but that kind of report will get priority attention.

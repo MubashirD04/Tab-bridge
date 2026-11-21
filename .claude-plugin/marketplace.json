@@ -1,0 +1,12 @@
+{
+  "name": "sharepane",
+  "description": "Sharepane: let Claude read the Firefox tabs you choose.",
+  "owner": { "name": "Sharepane contributors" },
+  "plugins": [
+    {
+      "name": "sharepane",
+      "source": "./plugins/sharepane",
+      "description": "Read the Firefox tabs you share with Claude: HTML, screenshots, console logs and network requests. Local only."
+    }
+  ]
+}

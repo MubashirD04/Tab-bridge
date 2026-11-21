@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Set up Sharepane</title>
+    <link rel="stylesheet" href="onboarding.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Set up Sharepane</h1>
+      <p class="lede">
+        Sharepane lets Claude read the Firefox tabs you choose. Each step below turns green by itself once it's done.
+      </p>
+
+      <ol class="steps">
+        <li class="step" data-state="done">
+          <span class="mark" aria-hidden="true"></span>
+          <div class="body">
+            <h2>Install the extension</h2>
+            <p>Done: you're looking at it.</p>
+          </div>
+        </li>
+
+        <li class="step" id="step-helper" data-state="pending">
+          <span class="mark" aria-hidden="true"></span>
+          <div class="body">
+            <h2>Connect the helper</h2>
+            <p id="helper-text">Checking…</p>
+            <div id="helper-command" class="command" hidden>
+              <code id="setup-command"></code>
+              <button type="button" id="copy-command" class="secondary">Copy</button>
+            </div>
+          </div>
+        </li>
+
+        <li class="step" id="step-local" data-state="pending" hidden>
+          <span class="mark" aria-hidden="true"></span>
+          <div class="body">
+            <h2>Allow access to your local dev servers</h2>
+            <p>
+              Sharepane has lost its access to <code>localhost</code> and <code>127.0.0.1</code>, so tabs on your
+              local dev server can't be read.
+            </p>
+            <button type="button" id="grant-local">Allow localhost access</button>
+          </div>
+        </li>
+
+        <li class="step" id="step-claude" data-state="pending">
+          <span class="mark" aria-hidden="true"></span>
+          <div class="body">
+            <h2>Connect Claude</h2>
+            <p id="claude-text">Waiting for the helper first.</p>
+          </div>
+        </li>
+
+        <li class="step" id="step-tab" data-state="pending">
+          <span class="mark" aria-hidden="true"></span>
+          <div class="body">
+            <h2>Allow a tab</h2>
+            <p id="tab-text">
+              Open the site you're working on, click the Sharepane toolbar icon, and choose <strong>Allow</strong>.
+            </p>
+            <p id="trusted-ports-text" class="hint" hidden></p>
+          </div>
+        </li>
+      </ol>
+
+      <section id="all-done" class="done-banner" hidden>
+        <h2>You're set up</h2>
+        <p>Ask Claude about the tab you allowed, for example: <em>"Why does the button on my page look misaligned?"</em></p>
+      </section>
+
+      <footer>
+        <p>
+          Claude can read console logs, network requests and screenshots too, once you turn them on in
+          <a href="#" id="open-settings">Settings</a>. All of them start off.
+        </p>
+        <p class="hint">Nothing leaves your computer. Sharepane talks only to a helper program Firefox starts on it.</p>
+      </footer>
+    </main>
+    <script src="onboarding.js"></script>
+  </body>
+</html>

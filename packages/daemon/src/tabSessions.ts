@@ -3,6 +3,7 @@ import { DEFAULT_RING_BUFFER_OPTIONS, RingBuffer } from "./ringBuffer.js";
 import type {
   AllowlistStore,
 } from "./allowlist.js";
+import { SharepaneError } from "./types.js";
 import type {
   CaptureSettings,
   ConsoleLogEntry,
@@ -25,7 +26,40 @@ export class TabRegistry {
   private buffers = new Map<number, TabBuffers>();
   // Off until the extension says otherwise (in `hello`), matching the
   // extension's own default.
-  private capture: CaptureSettings = { consoleLogs: false, networkRequests: false };
+  private capture: CaptureSettings = { consoleLogs: false, networkRequests: false, screenshots: false };
+  private activeTabId: number | null = null;
+
+  setActiveTab(tabId: number | null): void {
+    this.activeTabId = tabId;
+  }
+
+  getActiveTabId(): number | null {
+    return this.activeTabId;
+  }
+
+  /**
+   * The tab a tool should act on. An explicit tabId always wins (and is
+   * checked against the allow-list by the caller as before). Without one:
+   * the tab the user is looking at if it's shared, else the only shared tab,
+   * else an error that lists the choices so Claude can pick one.
+   */
+  resolveTab(tabId?: number): number {
+    if (tabId !== undefined) return tabId;
+    if (this.activeTabId !== null && this.isAllowed(this.activeTabId)) return this.activeTabId;
+    const shared = this.list();
+    if (shared.length === 1) return shared[0]!.tabId;
+    if (shared.length === 0) {
+      throw new SharepaneError(
+        "TAB_NOT_ALLOWED",
+        "No tabs are shared yet. Ask the user to open the page and turn on Share with Claude from the Sharepane toolbar icon."
+      );
+    }
+    const choices = shared.map((t) => `${t.tabId}: ${t.title} (${t.url})`).join("; ");
+    throw new SharepaneError(
+      "TAB_REQUIRED",
+      `Several tabs are shared and the one the user is looking at isn't one of them, so pass tabId. Shared tabs: ${choices}.`
+    );
+  }
 
   /** Clears every TabSession. With `keepBuffers` (a reconnect from the same
    * browser session, where tab ids are still meaningful), captured logs are
@@ -42,6 +76,7 @@ export class TabRegistry {
       this.buffers.clear();
     }
     this.sessions.clear();
+    this.activeTabId = null;
   }
 
   getCaptureSettings(): CaptureSettings {
@@ -51,7 +86,11 @@ export class TabRegistry {
   /** Turning a toggle off also discards what was already captured for it —
    * "off" shouldn't keep serving the last five minutes of data. */
   setCaptureSettings(capture: CaptureSettings): void {
-    this.capture = { consoleLogs: capture.consoleLogs, networkRequests: capture.networkRequests };
+    this.capture = {
+      consoleLogs: capture.consoleLogs,
+      networkRequests: capture.networkRequests,
+      screenshots: capture.screenshots,
+    };
     for (const buf of this.buffers.values()) {
       if (!this.capture.consoleLogs) buf.console.clear();
       if (!this.capture.networkRequests) buf.network.clear();

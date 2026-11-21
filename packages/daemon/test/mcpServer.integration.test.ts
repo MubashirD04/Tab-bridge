@@ -1,18 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { WebSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AllowlistStore } from "../src/allowlist.js";
-import { ConfigStore } from "../src/config.js";
-import { Logger } from "../src/logger.js";
-import { createMcpRequestHandler } from "../src/mcpServer.js";
-import { TabRegistry } from "../src/tabSessions.js";
-import { ExtensionBridge } from "../src/wsServer.js";
+import { runHost, type RunningHost } from "../src/host.js";
+import { SocketClientTransport } from "../src/socketClient.js";
+import { attachToHostStreams, type FakeExtension } from "./helpers/fakeExtension.js";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,100 +33,52 @@ const SESSION_ID = "test-browser-session";
 const ALLOWED_URL = "http://127.0.0.1:5500/index.html";
 const TAB_ID = 1;
 
-describe("Tab Bridge — MCP tool server, end to end", () => {
+// The whole production path minus Firefox itself: a fake extension speaking
+// native-messaging framing on the host's stdin/stdout, and a real MCP client
+// on the host's Unix socket.
+describe("Sharepane — native host + MCP over Unix socket, end to end", () => {
   let tmpDir: string;
-  let httpServer: http.Server;
-  let port: number;
-  let token: string;
-  let fakeExtension: WebSocket;
+  let host: RunningHost;
+  let fakeExtension: FakeExtension;
   let client: Client;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "tab-bridge-test-"));
-    const configStore = new ConfigStore(tmpDir);
-    const config = await configStore.loadOrCreateDaemonConfig();
-    token = config.token;
-
-    const logger = new Logger(configStore.configDir);
-    const allowlistStore = new AllowlistStore(configStore);
-    await allowlistStore.load();
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "tb-"));
     // No manual grant here on purpose: ALLOWED_URL is on port 5500, one of
     // the default trusted dev ports, so it's allowed via Live-Server
     // auto-approval — exercising that path end-to-end rather than the
     // manual-grant path, which allowlist.test.ts already covers directly.
+    const streams = attachToHostStreams();
+    fakeExtension = streams.fake;
+    host = await runHost({ input: streams.input, output: streams.output, configDir: tmpDir });
 
-    const tabRegistry = new TabRegistry();
-    httpServer = http.createServer();
-    const extensionBridge = new ExtensionBridge(httpServer, "/ext", token, allowlistStore, tabRegistry, logger);
-    const mcpHandler = createMcpRequestHandler({ tabRegistry, extensionBridge }, token);
+    await fakeExtension.hello(SESSION_ID, { consoleLogs: true, networkRequests: true, screenshots: true });
 
-    httpServer.on("request", (req, res) => {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (req.method === "POST" && url.pathname === "/mcp") {
-        void mcpHandler(req, res);
-        return;
-      }
-      res.writeHead(404).end();
-    });
-
-    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
-    port = (httpServer.address() as AddressInfo).port;
-
-    // --- Fake extension: a real WebSocket client standing in for the
-    // Firefox background script (blueprint Section 9: "integration tests
-    // against the http endpoint using a mock WebSocket client standing in
-    // for the extension"). ---
-    fakeExtension = new WebSocket(`ws://127.0.0.1:${port}/ext`);
-    await new Promise<void>((resolve) => fakeExtension.once("open", () => resolve()));
-
-    const helloAck = new Promise<void>((resolve) => {
-      fakeExtension.once("message", () => resolve()); // hello_ack
-    });
-    fakeExtension.send(
-      JSON.stringify({
-        type: "hello",
-        token,
-        browserSessionId: SESSION_ID,
-        capture: { consoleLogs: true, networkRequests: true },
-      })
-    );
-    await helloAck;
-
-    fakeExtension.on("message", (raw) => {
-      const msg = JSON.parse(raw.toString());
+    fakeExtension.on("message", (msg: Record<string, unknown>) => {
       if (msg.type === "get_content_request") {
-        fakeExtension.send(
-          JSON.stringify({
-            type: "get_content_response",
-            requestId: msg.requestId,
-            tabId: msg.tabId,
-            content: "<html><body><button class=\"misaligned\">Submit</button></body></html>",
-            truncated: false,
-          })
-        );
+        fakeExtension.send({
+          type: "get_content_response",
+          requestId: msg.requestId,
+          tabId: msg.tabId,
+          content: "<html><body><button class=\"misaligned\">Submit</button></body></html>",
+          truncated: false,
+        });
       } else if (msg.type === "screenshot_request") {
-        fakeExtension.send(
-          JSON.stringify({
-            type: "screenshot_response",
-            requestId: msg.requestId,
-            tabId: msg.tabId,
-            imageBase64: "ZmFrZS1wbmctYnl0ZXM=",
-            width: 1280,
-            height: 720,
-          })
-        );
+        fakeExtension.send({
+          type: "screenshot_response",
+          requestId: msg.requestId,
+          tabId: msg.tabId,
+          imageBase64: "ZmFrZS1wbmctYnl0ZXM=",
+          width: 1280,
+          height: 720,
+        });
       }
     });
 
-    fakeExtension.send(
-      JSON.stringify({ type: "tab_updated", tabId: TAB_ID, windowId: 1, url: ALLOWED_URL, title: "Test Page" })
-    );
+    fakeExtension.send({ type: "tab_updated", tabId: TAB_ID, windowId: 1, url: ALLOWED_URL, title: "Test Page" });
 
     client = new Client({ name: "test-client", version: "0.0.1" });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
-      requestInit: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    await client.connect(transport);
+    await client.connect(new SocketClientTransport(host.socketPath));
 
     // Make sure the tab_updated message above has actually been processed
     // before any test body runs, rather than relying on timing.
@@ -145,9 +90,27 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
 
   afterEach(async () => {
     await client.close();
-    fakeExtension.close();
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await host.close();
     await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates the socket so only this user can reach it", async () => {
+    expect((await stat(host.socketPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(tmpDir)).mode & 0o777).toBe(0o700);
+  });
+
+  it("refuses to start a second host on the same socket, and tells its extension why", async () => {
+    const second = attachToHostStreams();
+    const told = second.fake.nextMessage();
+    await expect(runHost({ input: second.input, output: second.output, configDir: tmpDir })).rejects.toThrow(
+      /already serving/
+    );
+    expect(await told).toMatchObject({ type: "host_error", code: "ANOTHER_INSTANCE" });
+  });
+
+  it("reports when Firefox closes the connection", async () => {
+    fakeExtension.close();
+    await host.ended;
   });
 
   it("the primary journey: list -> get_page_content -> screenshot_tab against a real allowed tab", async () => {
@@ -186,6 +149,59 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
     expect(metadata.data.height).toBe(720);
   });
 
+  it("screenshot_tab returns CAPTURE_DISABLED, without asking the extension, while screenshots are off", async () => {
+    fakeExtension.send({ type: "capture_settings_updated", capture: { consoleLogs: true, networkRequests: true, screenshots: false } });
+    const result = await waitFor(
+      async () => parseToolJson((await client.callTool({ name: "screenshot_tab", arguments: { tabId: TAB_ID } })) as never),
+      (r) => r.isError
+    );
+    expect(result.data.error.code).toBe("CAPTURE_DISABLED");
+    expect(result.data.error.message).toMatch(/Allow screenshots/);
+  });
+
+  describe("tabId defaults", () => {
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      parseToolJson((await client.callTool({ name, arguments: args })) as never);
+    const SECOND_URL = "http://127.0.0.1:5500/other.html";
+
+    it("uses the only shared tab when no tabId is given, and says which tab it used", async () => {
+      const result = await call("get_page_content", { mode: "html" });
+      expect(result.isError).toBe(false);
+      expect(result.data).toMatchObject({ tabId: TAB_ID, title: "Test Page", url: ALLOWED_URL });
+    });
+
+    it("prefers the shared tab the user is looking at, and marks it in list_allowed_tabs", async () => {
+      fakeExtension.send({ type: "tab_updated", tabId: 2, windowId: 1, url: SECOND_URL, title: "Other" });
+      fakeExtension.send({ type: "active_tab", tabId: 2 });
+      const used = await waitFor(() => call("get_console_logs"), (r) => r.data.tabId === 2);
+      expect(used.data.url).toBe(SECOND_URL);
+
+      const list = await call("list_allowed_tabs");
+      expect(list.data.tabs.map((t: { tabId: number; active: boolean }) => [t.tabId, t.active])).toEqual([
+        [TAB_ID, false],
+        [2, true],
+      ]);
+    });
+
+    it("asks for a tabId, listing the choices, when several are shared and the active one isn't", async () => {
+      fakeExtension.send({ type: "tab_updated", tabId: 2, windowId: 1, url: SECOND_URL, title: "Other" });
+      fakeExtension.send({ type: "active_tab", tabId: 99 }); // e.g. an unshared docs page
+      const result = await waitFor(() => call("get_network_requests"), (r) => r.isError);
+      expect(result.data.error.code).toBe("TAB_REQUIRED");
+      expect(result.data.error.message).toContain(`${TAB_ID}: Test Page (${ALLOWED_URL})`);
+      expect(result.data.error.message).toContain(`2: Other (${SECOND_URL})`);
+
+      // An explicit tabId still works as before.
+      expect((await call("get_network_requests", { tabId: 2 })).data.tabId).toBe(2);
+    });
+
+    it("says nothing is shared yet, rather than guessing, when no tab is shared", async () => {
+      fakeExtension.send({ type: "tab_removed", tabId: TAB_ID });
+      const result = await waitFor(() => call("screenshot_tab"), (r) => r.isError && r.data.error.code === "TAB_NOT_ALLOWED");
+      expect(result.data.error.message).toMatch(/No tabs are shared yet/);
+    });
+  });
+
   it("returns TAB_NOT_ALLOWED for a tab that was never granted, without ever asking the extension", async () => {
     const result = parseToolJson(
       (await client.callTool({
@@ -198,8 +214,7 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
   });
 
   it("redacts Authorization/Cookie headers in captured network requests before they're ever readable via MCP", async () => {
-    fakeExtension.send(
-      JSON.stringify({
+    fakeExtension.send({
         type: "network_request",
         entry: {
           tabId: TAB_ID,
@@ -212,8 +227,7 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
           requestHeaders: { Authorization: "Bearer super-secret", "X-Custom": "keep-me" },
           responseHeaders: { "Set-Cookie": "session=abc123" },
         },
-      })
-    );
+      });
 
     const result = await waitFor(
       async () =>
@@ -230,8 +244,7 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
   });
 
   it("get_console_logs returns captured entries for an allowed tab", async () => {
-    fakeExtension.send(
-      JSON.stringify({
+    fakeExtension.send({
         type: "console_log",
         entry: {
           tabId: TAB_ID,
@@ -239,8 +252,7 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
           level: "error",
           args: ["TypeError: cannot read property 'foo' of undefined"],
         },
-      })
-    );
+      });
 
     const result = await waitFor(
       async () =>
@@ -253,21 +265,17 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
   });
 
   it("returns CAPTURE_DISABLED (not an empty list) once capture is turned off, and drops what was captured", async () => {
-    fakeExtension.send(
-      JSON.stringify({
+    fakeExtension.send({
         type: "console_log",
         entry: { tabId: TAB_ID, timestamp: new Date().toISOString(), level: "log", args: ["before"] },
-      })
-    );
+      });
     await waitFor(
       async () =>
         parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
       (r) => r.data.entries?.length === 1
     );
 
-    fakeExtension.send(
-      JSON.stringify({ type: "capture_settings_updated", capture: { consoleLogs: false, networkRequests: true } })
-    );
+    fakeExtension.send({ type: "capture_settings_updated", capture: { consoleLogs: false, networkRequests: true, screenshots: true } });
     const disabled = await waitFor(
       async () =>
         parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
@@ -281,9 +289,7 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
     );
     expect(network.isError).toBe(false);
 
-    fakeExtension.send(
-      JSON.stringify({ type: "capture_settings_updated", capture: { consoleLogs: true, networkRequests: true } })
-    );
+    fakeExtension.send({ type: "capture_settings_updated", capture: { consoleLogs: true, networkRequests: true, screenshots: true } });
     const reenabled = await waitFor(
       async () =>
         parseToolJson((await client.callTool({ name: "get_console_logs", arguments: { tabId: TAB_ID } })) as never),
@@ -295,12 +301,10 @@ describe("Tab Bridge — MCP tool server, end to end", () => {
   it("applies level filters before limit", async () => {
     const now = Date.now();
     const send = (i: number, level: string) =>
-      fakeExtension.send(
-        JSON.stringify({
+      fakeExtension.send({
           type: "console_log",
           entry: { tabId: TAB_ID, timestamp: new Date(now + i).toISOString(), level, args: [`${level}-${i}`] },
-        })
-      );
+        });
     send(0, "error");
     for (let i = 1; i <= 5; i++) send(i, "log");
     await waitFor(

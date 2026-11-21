@@ -21,11 +21,11 @@
 // held locally until content-script.js reports whether capture is active
 // for this tab. "inactive" puts the page's console back the way it was.
 (() => {
-  if (window.__tabBridgeConsoleHooked) return;
-  window.__tabBridgeConsoleHooked = true;
+  if (window.__sharepaneConsoleHooked) return;
+  window.__sharepaneConsoleHooked = true;
 
-  const TO_CONTENT_EVENT = "tab-bridge:console";
-  const FROM_CONTENT_EVENT = "tab-bridge:control";
+  const TO_CONTENT_EVENT = "sharepane:console";
+  const FROM_CONTENT_EVENT = "sharepane:control";
   const MAX_ARG_CHARS = 2000;
   const MAX_ARGS = 10;
   const MAX_DEPTH = 4;

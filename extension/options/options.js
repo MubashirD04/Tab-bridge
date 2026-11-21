@@ -57,9 +57,9 @@ async function submitTrustedPorts(nextPorts) {
   if (!result?.ok) {
     const reason =
       result?.reason === "not_connected"
-        ? "Not connected to the daemon right now — connect first (see the status above)."
+        ? "Not connected to the Sharepane helper right now — open the toolbar popup to see why."
         : result?.reason === "timeout"
-          ? "The daemon didn't respond in time. Check that it's still running."
+          ? "The Sharepane helper didn't respond in time. Try again in a moment."
           : "Couldn't save the change.";
     setTrustedPortsError(reason);
     return false;
@@ -75,24 +75,21 @@ function removePort(index) {
 }
 
 async function load() {
-  const stored = await browser.storage.local.get(["daemonPort", "pairingToken"]);
-  document.getElementById("daemon-port").value = stored.daemonPort || 8765;
-  document.getElementById("pairing-token").value = stored.pairingToken || "";
-
   const status = await browser.runtime.sendMessage({ type: "get_status" });
   currentlyConnected = status.connectionState === "connected";
   currentTrustedPorts = status.trustedPorts || [];
   document.getElementById("capture-console-logs").checked = Boolean(status.captureConsoleLogs);
   document.getElementById("capture-network-requests").checked = Boolean(status.captureNetworkRequests);
+  document.getElementById("capture-screenshots").checked = Boolean(status.captureScreenshots);
 
   const addButton = document.querySelector("#trusted-ports-form button[type=submit]");
   addButton.disabled = !currentlyConnected;
 
   if (!currentlyConnected) {
     setTrustedPortsError(
-      status.hasPairingToken
-        ? "Not connected to the daemon — the list below may be out of date, and edits are disabled until it reconnects."
-        : "Not paired yet — pair with the daemon above before editing trusted ports."
+      status.connectionState === "host_missing"
+        ? "Sharepane's helper isn't installed — see the setup guide (toolbar icon → Setup guide)."
+        : "Not connected to the Sharepane helper — the list below may be out of date, and edits are disabled until it reconnects."
     );
   } else {
     setTrustedPortsError("");
@@ -100,23 +97,6 @@ async function load() {
 
   renderTrustedPortsTable(currentTrustedPorts);
 }
-
-document.getElementById("settings-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const daemonPort = Number(document.getElementById("daemon-port").value) || 8765;
-  const pairingToken = document.getElementById("pairing-token").value.trim();
-
-  const status = document.getElementById("save-status");
-  status.textContent = "Saving…";
-
-  await browser.runtime.sendMessage({ type: "save_settings", daemonPort, pairingToken });
-
-  status.textContent = "Saved. Reconnecting…";
-  setTimeout(() => {
-    status.textContent = "";
-    load();
-  }, 1200);
-});
 
 document.getElementById("trusted-ports-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -161,5 +141,28 @@ async function saveCaptureSettings() {
 
 document.getElementById("capture-console-logs").addEventListener("change", saveCaptureSettings);
 document.getElementById("capture-network-requests").addEventListener("change", saveCaptureSettings);
+
+// Screenshots are a Firefox permission, not a stored setting: granting
+// <all_urls> is what turns them on (background.js listens for the change).
+// permissions.request must be the first await in a user-action handler.
+document.getElementById("capture-screenshots").addEventListener("change", async (e) => {
+  const checkbox = e.target;
+  const statusEl = document.getElementById("capture-status");
+  let enabled;
+  try {
+    enabled = checkbox.checked
+      ? await browser.permissions.request({ origins: ["<all_urls>"] })
+      : !(await browser.permissions.remove({ origins: ["<all_urls>"] }));
+  } catch (err) {
+    enabled = false;
+    console.warn("Sharepane: screenshot permission change failed", err);
+  }
+  checkbox.checked = enabled;
+  statusEl.textContent = enabled ? "Screenshots on." : "Screenshots off.";
+  clearTimeout(captureStatusTimer);
+  captureStatusTimer = setTimeout(() => {
+    statusEl.textContent = "";
+  }, 2000);
+});
 
 load();

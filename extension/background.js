@@ -1,86 +1,31 @@
-// Tab Bridge — background script.
+// Sharepane — background script.
 //
-// Owns: the WebSocket connection to the local daemon, tab tracking, the
-// popup's allow/revoke actions, and injecting the capture pipeline
-// (console-hook.js + content-script.js) into allowed tabs. See
-// tab-bridge-blueprint.md for the full design and wire protocol.
+// Owns: the native-messaging connection to the local Sharepane host, tab
+// tracking, the popup's allow/revoke actions, and injecting the capture
+// pipeline (console-hook.js + content-script.js) into allowed tabs.
 //
-// Nothing in this file talks to anything other than 127.0.0.1 — see the
-// blueprint's Security section ("No cloud relay").
+// Firefox itself launches the host when connectNative() is called, and only
+// for this extension (the host manifest's allowed_extensions). There is no
+// port, no pairing token and nothing on the network. An open native port
+// also keeps this event page alive, so no keep-alive tricks are needed (see
+// prototypes/native-messaging/FINDINGS.md).
 
-const RECONNECT_DELAY_MS = 3000;
-const RECONNECT_ALARM_PREFIX = "tab-bridge-reconnect-";
-// Measured live against real Firefox (see daemon.log analysis): an idle event
-// page here gets killed roughly 30s after its last qualifying activity, even
-// with an open WebSocket that's actively exchanging messages — producing a
-// metronomic ~30s-connected/~30s-disconnected cycle, since the single
-// 60s-clamped alarm below was the only thing reviving it. 3 alarms, staggered
-// 20s apart (see below), land under that ~30s threshold.
-const RECONNECT_ALARM_COUNT = 3;
-const RECONNECT_ALARM_STAGGER_MS = 20_000;
-const DEFAULT_DAEMON_PORT = 8765;
+const NATIVE_HOST_NAME = "sharepane";
+// Retries if the host exits unexpectedly. "Host not installed" isn't retried
+// on a timer (it won't fix itself); opening the popup retries it instead.
+const RECONNECT_DELAY_MS = 5000;
 
-// A Firefox event page can be unloaded whenever it's idle — an open
-// WebSocket does *not* keep it alive, only a visible view (popup/options)
-// does. setTimeout() is discarded along with everything else on unload, so
-// a setTimeout-scheduled reconnect can silently vanish and never fire. The
-// alarms API is built to survive that: it wakes the page back up (re-running
-// this whole script) specifically to dispatch the alarm. Must be registered
-// at top level, unconditionally, so it's wired up again on every such wake.
-//
-// Firefox also clamps any alarm delay under 1 minute up to exactly 1 minute
-// (undocumented on MDN, confirmed empirically — a 3s delayInMinutes just
-// silently became a 60s one). A *single* such alarm is used as a backstop,
-// not the primary path — see the close handler below, which also fires a
-// quick setTimeout() that wins whenever the page is still warm — but on its
-// own it leaves the page idle (and thus killable) for up to a minute at a
-// time, which live testing showed Firefox actually does about half of every
-// cycle (see the constants above). Firing an alarm's onAlarm listener is the
-// one mechanism confirmed, by the very fact reconnects happen at all, to
-// wake/reset an idled page — so registering several 60s-period alarms, each
-// *created* ~20s apart in real time, makes each start its own 60s cycle from
-// its own creation moment: once all are established, one of them fires
-// roughly every ~20s instead of every ~60s, without any single alarm ever
-// going below Firefox's per-alarm minimum. That ~20s cadence keeps poking the
-// page well inside the ~30s idle window, so it should never go idle long
-// enough to be killed at all while any of these alarms are live — turning
-// this from "the primary reconnect backstop" into "the thing that mostly
-// prevents needing to reconnect in the first place."
-//
-// Each alarm is checked for existence (via alarms.get) before being created,
-// rather than being blindly (re)created on every wake — alarms.create()
-// with an existing name resets that alarm's own period to start counting
-// from *now*, which would keep re-phasing all three relative to whatever
-// wake happens to be running this script, fighting the very stagger this
-// sets up. Once established, each of the three alarms' schedule lives at the
-// browser level, independent of this script's own liveness, so it survives
-// being re-registered as a no-op on every subsequent wake.
-for (let i = 0; i < RECONNECT_ALARM_COUNT; i++) {
-  const name = `${RECONNECT_ALARM_PREFIX}${i}`;
-  setTimeout(async () => {
-    const existing = await browser.alarms.get(name);
-    if (!existing) browser.alarms.create(name, { periodInMinutes: 1 });
-  }, i * RECONNECT_ALARM_STAGGER_MS);
-}
-browser.alarms.onAlarm.addListener((alarm) => {
-  if (!alarm.name.startsWith(RECONNECT_ALARM_PREFIX)) return;
-  // Also skip "unauthorized" — a bad token won't fix itself, and retrying it
-  // every minute forever would just spam the daemon's auth-rejected log.
-  // saveSettings() already calls connect() directly once the token changes.
-  if (connectionState === "connected" || connectionState === "connecting" || connectionState === "unauthorized") return;
-  connect();
-});
-
-let socket = null;
+let port = null;
 let browserSessionId = null;
-let daemonPort = DEFAULT_DAEMON_PORT;
-let pairingToken = null;
-// "disconnected" | "connecting" | "connected" | "unauthorized" (daemon is
-// reachable but rejected the pairing token — distinguished from a plain
-// "disconnected" so the popup/options page can tell "daemon isn't running"
-// apart from "daemon's running but the token's wrong," which need different
-// fixes from a less-technical user's point of view.
-let connectionState = "disconnected";
+// "connecting" | "connected" | "host_missing" (native host not installed) |
+// "host_error" (the host refused to start, see hostError) | "disconnected"
+// (the host exited unexpectedly; retrying).
+let connectionState = "connecting";
+let hostError = null; // { code, message } from a host_error message
+// MCP apps connected through `sharepane mcp` right now, by client name
+// (e.g. "claude-code"), as the host reports them. Drives the onboarding
+// page's "Claude connected" item.
+let mcpClients = [];
 // Console logs and network requests are sensitive enough (page-internal state,
 // request/response headers) that capturing them is opt-in and off by default,
 // unlike page content/screenshots which only ever happen on an explicit
@@ -88,6 +33,13 @@ let connectionState = "disconnected";
 // saveCaptureSettings() below.
 let captureConsoleLogs = false;
 let captureNetworkRequests = false;
+// Screenshots need tabs.captureTab, which Firefox only exposes once the user
+// grants all-sites access (verified in Firefox 160: with per-site or
+// activeTab permissions the function doesn't exist at all). So this isn't a
+// stored setting: it mirrors whether that permission is granted right now.
+// Granted/removed from the options page; see the permissions listeners below.
+let captureScreenshots = false;
+const ALL_SITES = { origins: ["<all_urls>"] };
 let trustedPorts = []; // [{port, label, protocol}] — as reported by the daemon in hello_ack
 let pendingTrustedPortsUpdate = null; // {resolve, timer} — see updateTrustedPorts()
 // Origins with a still-valid manual grant in this browser session, as
@@ -114,14 +66,7 @@ const pendingNetworkRequests = new Map(); // requestId -> partial entry
 // ---- settings & session id ----
 
 async function loadSettings() {
-  const stored = await browser.storage.local.get([
-    "daemonPort",
-    "pairingToken",
-    "captureConsoleLogs",
-    "captureNetworkRequests",
-  ]);
-  daemonPort = stored.daemonPort || DEFAULT_DAEMON_PORT;
-  pairingToken = stored.pairingToken || null;
+  const stored = await browser.storage.local.get(["captureConsoleLogs", "captureNetworkRequests"]);
   captureConsoleLogs = Boolean(stored.captureConsoleLogs);
   captureNetworkRequests = Boolean(stored.captureNetworkRequests);
 }
@@ -161,12 +106,29 @@ async function getBrowserSessionId() {
   // which compares against whatever session id we report in `hello`.
   const stored = await browser.storage.session.get("browserSessionId");
   if (stored.browserSessionId) return stored.browserSessionId;
-  const id = crypto.randomUUID();
+  // storage.session is also cleared when the extension reloads itself (see
+  // reloadKeepingSession), which is not a browser restart. Pick up the id
+  // that reload carried over, if it's fresh.
+  const { carriedSessionId } = await browser.storage.local.get("carriedSessionId");
+  await browser.storage.local.remove("carriedSessionId");
+  const carried =
+    carriedSessionId && Date.now() - carriedSessionId.at < CARRIED_SESSION_MAX_AGE_MS ? carriedSessionId.id : null;
+  const id = carried || crypto.randomUUID();
   await browser.storage.session.set({ browserSessionId: id });
   return id;
 }
 
-// ---- daemon connection ----
+const CARRIED_SESSION_MAX_AGE_MS = 30_000;
+
+/** runtime.reload() wipes storage.session, which would look like a browser
+ * restart and expire every manual grant. Carry the session id across. */
+async function reloadKeepingSession() {
+  const id = browserSessionId || (await browser.storage.session.get("browserSessionId")).browserSessionId;
+  if (id) await browser.storage.local.set({ carriedSessionId: { id, at: Date.now() } });
+  browser.runtime.reload();
+}
+
+// ---- host connection ----
 
 function updateBadge() {
   const text = connectionState === "connected" ? "" : connectionState === "connecting" ? "…" : "!";
@@ -175,100 +137,97 @@ function updateBadge() {
       ? "#2ea043"
       : connectionState === "connecting"
         ? "#9e6a03"
-        : connectionState === "unauthorized"
+        : connectionState === "host_missing" || connectionState === "host_error"
           ? "#cf222e"
           : "#8b949e";
   browser.action.setBadgeText({ text });
   browser.action.setBadgeBackgroundColor({ color });
+  void refreshAllTabBadges();
 }
 
-async function connect() {
-  await loadSettings();
-  if (!pairingToken) {
-    connectionState = "disconnected";
-    updateBadge();
-    return;
+// Per-tab badge: a green "ON" on the toolbar icon whenever Claude can read
+// the tab you're looking at. Only while connected; otherwise the tab badge
+// is cleared so the global "!" / "…" connection badge shows through.
+async function updateTabBadge(tabId) {
+  const shared = connectionState === "connected" && allowedTabIds.has(tabId);
+  try {
+    await browser.action.setBadgeText({ tabId, text: shared ? "ON" : null });
+    if (shared) await browser.action.setBadgeBackgroundColor({ tabId, color: "#2ea043" });
+    await browser.action.setTitle({ tabId, title: shared ? "Sharepane: Claude can read this tab" : null });
+  } catch {
+    // tab closed in the meantime
   }
+}
+
+async function refreshAllTabBadges() {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.map((t) => updateTabBadge(t.id)));
+}
+
+let reconnectTimer = null;
+
+async function connect() {
+  if (port) return;
+  clearTimeout(reconnectTimer);
   connectionState = "connecting";
+  hostError = null;
   updateBadge();
 
-  // Bound to a local const so each handler below can tell whether *it's*
-  // still the active connection by the time its event fires. `socket` (the
-  // module-level pointer) gets reassigned every time connect() runs, so
-  // without this check a stale, already-superseded socket's close handler
-  // would schedule its own redundant reconnect — and since every closed
-  // socket does the same thing, two such chains end up perpetually
-  // superseding (WS close code 4002) and re-scheduling each other forever.
-  const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/ext`);
-  socket = ws;
+  // Bound to a local const so a late event from an old port can't clobber
+  // state belonging to a newer one.
+  const p = browser.runtime.connectNative(NATIVE_HOST_NAME);
+  port = p;
 
-  ws.addEventListener("open", async () => {
-    if (socket !== ws) return;
-    browserSessionId = await getBrowserSessionId();
-    sendRaw({ type: "hello", token: pairingToken, browserSessionId, capture: currentCaptureSettings() });
-  });
-
-  ws.addEventListener("message", (event) => {
-    if (socket !== ws) return;
-    let msg;
-    try {
-      msg = JSON.parse(event.data);
-    } catch {
-      return;
-    }
+  p.onMessage.addListener((msg) => {
+    if (port !== p) return;
     handleDaemonMessage(msg);
   });
 
-  ws.addEventListener("close", (event) => {
-    if (socket !== ws) return; // already superseded — the newer connection owns reconnect duty
+  p.onDisconnect.addListener(() => {
+    if (port !== p) return;
+    port = null;
     if (pendingTrustedPortsUpdate) {
       clearTimeout(pendingTrustedPortsUpdate.timer);
       pendingTrustedPortsUpdate.resolve({ ok: false, reason: "not_connected" });
       pendingTrustedPortsUpdate = null;
     }
-    // Code 4001 is the daemon's own "unauthorized" close (see wsServer.ts
-    // handleConnection) — surface that distinctly rather than lumping it in
-    // with "daemon isn't running," since the fix is different (recheck the
-    // token vs. start the daemon) and retrying a known-bad token every 3s
-    // would just spam the daemon's auth-rejected log for no benefit.
-    if (event.code === 4001) {
-      connectionState = "unauthorized";
-      updateBadge();
-      return;
+    // Firefox reports a missing host manifest as "No such native
+    // application". That needs the user to run the installer, so it gets
+    // its own state and no timer retry.
+    const error = p.error?.message || "";
+    if (/no such native application/i.test(error)) {
+      connectionState = "host_missing";
+    } else if (hostError) {
+      connectionState = "host_error";
+    } else {
+      connectionState = "disconnected";
+      reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
     }
-    connectionState = "disconnected";
     updateBadge();
-    // Fast path — usually wins, since the page is normally still warm right
-    // after a close event actually fires. The recurring heartbeat alarm
-    // registered at top level is the backstop for when it isn't (or when
-    // the page was killed before this handler ever got to run at all).
-    setTimeout(connect, RECONNECT_DELAY_MS);
   });
 
-  ws.addEventListener("error", () => {
-    try {
-      ws.close();
-    } catch {
-      // already closing
-    }
-  });
+  browserSessionId = await getBrowserSessionId();
+  await refreshScreenshotPermission();
+  sendRaw({ type: "hello", browserSessionId, capture: currentCaptureSettings() });
 }
 
 function sendRaw(message) {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
+  if (!port) return;
+  try {
+    port.postMessage(message);
+  } catch {
+    // The port is going away; onDisconnect handles the state change.
   }
 }
 
-// Console/network entries produced while the socket is down (e.g. during the
-// few seconds a reconnect takes) are held here instead of dropped, and
+// Console/network entries produced before the host has acknowledged hello are held here instead of dropped, and
 // flushed once the daemon has the tab list again — see resyncAllTabs(). This
 // only helps while this script stays alive; a killed event page loses them.
 const MAX_QUEUED_CAPTURE_MESSAGES = 500;
 let queuedCaptureMessages = [];
 
 function sendCapture(message) {
-  if (connectionState === "connected" && socket?.readyState === WebSocket.OPEN) {
+  if (connectionState === "connected") {
     sendRaw(message);
     return;
   }
@@ -283,20 +242,99 @@ function flushQueuedCaptureMessages() {
 }
 
 function currentCaptureSettings() {
-  return { consoleLogs: captureConsoleLogs, networkRequests: captureNetworkRequests };
+  return { consoleLogs: captureConsoleLogs, networkRequests: captureNetworkRequests, screenshots: captureScreenshots };
 }
+
+// ---- host permissions ----
+//
+// Install asks only for localhost/127.0.0.1 (trusted dev ports). Every other
+// site is requested one origin at a time, from the popup's Allow click, and
+// handed back on revoke. Match patterns can't carry a port, so a grant for
+// https://staging.example.com covers every port on that host.
+
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
+// Exactly the manifest's host_permissions. Granted at install, but the user
+// can remove them in about:addons, which silently breaks trusted dev ports;
+// the onboarding page checks for that and offers to re-grant.
+const LOCAL_ACCESS = { origins: browser.runtime.getManifest().host_permissions };
+
+function originPattern(rawUrl) {
+  const u = new URL(rawUrl);
+  return `${u.protocol}//${u.hostname}/*`;
+}
+
+async function hasOriginPermission(rawUrl) {
+  try {
+    return await browser.permissions.contains({ origins: [originPattern(rawUrl)] });
+  } catch {
+    return false;
+  }
+}
+
+async function refreshScreenshotPermission() {
+  captureScreenshots =
+    typeof browser.tabs.captureTab === "function" && (await browser.permissions.contains(ALL_SITES));
+}
+
+/** Drops grants whose host permission the user has taken away (about:addons
+ * → Permissions), locally and on the host. Without this a grant would look
+ * valid to Claude while every read of it failed. */
+async function reconcileGrantsWithPermissions() {
+  const lost = [];
+  for (const origin of grantedOrigins) {
+    if (!(await hasOriginPermission(origin))) lost.push(origin);
+  }
+  for (const origin of lost) {
+    grantedOrigins.delete(origin);
+    sendRaw({ type: "revoke_origin", origin });
+  }
+  if (lost.length > 0) {
+    void updateEarlyCaptureRegistration();
+    await syncAllTabsAllowState();
+  }
+}
+
+browser.permissions.onAdded.addListener(async (permissions) => {
+  if (!permissions.origins?.includes("<all_urls>")) return;
+  if (typeof browser.tabs.captureTab !== "function") {
+    // Granted mid-session, but this context was set up without the API.
+    // Reloading re-runs the background script with captureTab available.
+    await reloadKeepingSession();
+    return;
+  }
+  await refreshScreenshotPermission();
+  sendRaw({ type: "capture_settings_updated", capture: currentCaptureSettings() });
+});
+
+browser.permissions.onRemoved.addListener(async (permissions) => {
+  await refreshScreenshotPermission();
+  sendRaw({ type: "capture_settings_updated", capture: currentCaptureSettings() });
+  await reconcileGrantsWithPermissions();
+});
 
 async function handleDaemonMessage(msg) {
   switch (msg.type) {
+    case "mcp_clients": {
+      mcpClients = msg.clients || [];
+      break;
+    }
+    case "host_error": {
+      // Sent just before the host exits; onDisconnect reads it.
+      hostError = { code: msg.code, message: msg.message };
+      break;
+    }
     case "hello_ack": {
       connectionState = "connected";
       trustedPorts = msg.trustedPorts || [];
       grantedOrigins = new Set(msg.grantedOrigins || []);
+      mcpClients = msg.mcpClients || [];
       allowStateKnown = true;
       for (const notify of allowStateWaiters.splice(0)) notify();
       updateBadge();
+      await reconcileGrantsWithPermissions();
       void updateEarlyCaptureRegistration();
       await resyncAllTabs();
+      await reportActiveTab();
       break;
     }
     case "get_content_request": {
@@ -331,8 +369,7 @@ async function resyncAllTabs() {
   // entries for tabs it doesn't consider allowed).
   for (const tab of tabs) reportTab(tab);
   flushQueuedCaptureMessages();
-  // A reconnect may mean this script context is a fresh reload with an empty
-  // allowedTabIds, and already-open tabs won't fire a new onUpdated event —
+  // This script context may be a fresh load with an empty allowedTabIds, and already-open tabs won't fire a new onUpdated event —
   // so re-derive local allow state (and injection) for all of them here.
   await Promise.all(tabs.map(syncTabAllowState));
 }
@@ -356,9 +393,11 @@ async function syncTabAllowState(tab) {
   if (tab.id === undefined) return;
   if (!isTrackableTab(tab) || !shouldAutoAllow(tab.url)) {
     if (allowedTabIds.delete(tab.id)) pushCaptureState(tab.id); // detach its console hook
+    void updateTabBadge(tab.id);
     return;
   }
   allowedTabIds.add(tab.id);
+  void updateTabBadge(tab.id);
   if (tab.status === "complete") await ensureCapturePipeline(tab.id);
 }
 
@@ -386,6 +425,26 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+// The tab the user is looking at, so Claude's tools can default to it. Uses
+// the last-focused window, which stays put while the user is off in a
+// terminal talking to Claude. Private windows report nothing.
+async function reportActiveTab() {
+  if (connectionState !== "connected") return;
+  let tab;
+  try {
+    [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+  } catch {
+    tab = undefined;
+  }
+  sendRaw({ type: "active_tab", tabId: tab && !tab.incognito ? tab.id : null });
+}
+
+browser.tabs.onActivated.addListener(() => void reportActiveTab());
+browser.windows.onFocusChanged.addListener((windowId) => {
+  // WINDOW_ID_NONE means Firefox itself lost focus: keep the last tab.
+  if (windowId !== browser.windows.WINDOW_ID_NONE) void reportActiveTab();
+});
+
 browser.tabs.onRemoved.addListener((tabId) => {
   sendRaw({ type: "tab_removed", tabId });
   allowedTabIds.delete(tabId);
@@ -408,7 +467,7 @@ async function ensureCapturePipeline(tabId) {
       // through, or the tab navigated away mid-injection) — don't crash the
       // background script over it.
       contentScriptInjected.delete(tabId);
-      console.warn("Tab Bridge: content script injection failed", err);
+      console.warn("Sharepane: content script injection failed", err);
     }
   }
   // console-hook.js is only injected when the user has opted into console
@@ -421,7 +480,7 @@ async function ensureCapturePipeline(tabId) {
       await browser.scripting.executeScript({ target: { tabId }, files: ["console-hook.js"], world: "MAIN" });
     } catch (err) {
       consoleHookInjected.delete(tabId);
-      console.warn("Tab Bridge: console hook injection failed", err);
+      console.warn("Sharepane: console hook injection failed", err);
     }
   }
   pushCaptureState(tabId);
@@ -440,7 +499,7 @@ function pushCaptureState(tabId) {
 
 // ---- document_start registration, so logs/errors during page load are caught ----
 
-const EARLY_CAPTURE_SCRIPT_IDS = ["tab-bridge-early-content-script", "tab-bridge-early-console-hook"];
+const EARLY_CAPTURE_SCRIPT_IDS = ["sharepane-early-content-script", "sharepane-early-console-hook"];
 let registrationChain = Promise.resolve();
 
 /** Match patterns can't express ports, so these are host-wide: a trusted
@@ -495,7 +554,7 @@ function updateEarlyCaptureRegistration() {
     } catch (err) {
       // Capture still works without this, just from page load completion on
       // (ensureCapturePipeline()).
-      console.warn("Tab Bridge: couldn't register document_start capture scripts", err);
+      console.warn("Sharepane: couldn't register document_start capture scripts", err);
     }
   });
   return registrationChain;
@@ -543,6 +602,12 @@ async function handleContentRequest(msg) {
 async function handleScreenshotRequest(msg) {
   if (!allowedTabIds.has(msg.tabId)) {
     sendRaw({ type: "screenshot_response", requestId: msg.requestId, tabId: msg.tabId, error: "tab_closed" });
+    return;
+  }
+  if (typeof browser.tabs.captureTab !== "function") {
+    // The host checks captureScreenshots first; this covers a race with
+    // the permission being removed.
+    sendRaw({ type: "screenshot_response", requestId: msg.requestId, tabId: msg.tabId, error: "screenshots_disabled" });
     return;
   }
   try {
@@ -751,7 +816,7 @@ function headersToObject(headers) {
   // Note: redaction of credential headers (Authorization, Cookie, ...) happens daemon-side
   // (redact.ts), unconditionally, before these ever land in a ring buffer —
   // see the blueprint's Security section. The extension sends raw headers
-  // over the already-token-authed localhost WebSocket; nothing here leaves
+  // over the native-messaging pipe to the local host; nothing here leaves
   // the machine unredacted.
 }
 
@@ -766,9 +831,6 @@ browser.runtime.onMessage.addListener((message) => {
   }
   if (message?.type === "revoke_tab") {
     return revokeTab(message.tabId);
-  }
-  if (message?.type === "save_settings") {
-    return saveSettings(message.daemonPort, message.pairingToken);
   }
   if (message?.type === "update_trusted_ports") {
     return updateTrustedPorts(message.ports);
@@ -832,13 +894,18 @@ async function saveCaptureSettings(newCaptureConsoleLogs, newCaptureNetworkReque
 }
 
 async function getStatus() {
+  // Opening the popup or settings is a natural moment to retry, e.g. right
+  // after the user ran the installer.
+  if (!port) void connect();
   const tabs = await browser.tabs.query({});
   return {
     connectionState,
-    daemonPort,
-    hasPairingToken: Boolean(pairingToken),
+    hostError,
     captureConsoleLogs,
     captureNetworkRequests,
+    captureScreenshots,
+    localAccess: await browser.permissions.contains(LOCAL_ACCESS).catch(() => false),
+    mcpClients: connectionState === "connected" ? mcpClients : [],
     trustedPorts,
     tabs: tabs
       .filter((t) => t.url && /^https?:/.test(t.url) && !t.incognito)
@@ -848,6 +915,9 @@ async function getStatus() {
         url: t.url,
         favIconUrl: t.favIconUrl,
         allowed: allowedTabIds.has(t.id),
+        // Trusted-port tabs are shared by Settings, not by a click, so the
+        // popup shows them as locked on.
+        source: !allowedTabIds.has(t.id) ? null : matchesTrustedPort(t.url) ? "trusted-port" : "shared",
       })),
   };
 }
@@ -857,11 +927,6 @@ async function allowTab(tabId) {
   // would be silently dropped while the popup claimed success.
   if (connectionState !== "connected") return { ok: false, reason: "not_connected" };
   const tab = await browser.tabs.get(tabId);
-  // host_permissions grants <all_urls> unconditionally at install (needed
-  // for tabs.captureTab — see manifest.json) — every origin already has host
-  // access, so there's nothing left to request/confirm here the way there
-  // was back when only 127.0.0.1/localhost were pre-granted. This is just an
-  // URL-sanity check now.
   let origin;
   try {
     origin = new URL(tab.url).origin;
@@ -869,6 +934,10 @@ async function allowTab(tabId) {
     return { ok: false, reason: "invalid_url" };
   }
   if (!isTrackableTab(tab)) return { ok: false, reason: "invalid_url" };
+  // The popup asks Firefox for this origin (permissions.request has to run
+  // in its click handler, not here). Refuse rather than record a grant the
+  // extension couldn't act on.
+  if (!(await hasOriginPermission(tab.url))) return { ok: false, reason: "permission_denied" };
 
   sendRaw({ type: "grant_access", tabId, url: tab.url, label: tab.title });
   // The daemon grants the whole origin, so every open tab at it is allowed,
@@ -888,6 +957,7 @@ async function revokeTab(tabId) {
     // Tab already gone — onRemoved has cleaned up after it.
   }
   allowedTabIds.delete(tabId);
+  void updateTabBadge(tabId);
   sendRaw({ type: "revoke_access", tabId });
   pushCaptureState(tabId);
   if (tab?.url) {
@@ -895,26 +965,22 @@ async function revokeTab(tabId) {
     // other tabs still allowed via a trusted port stay allowed. The revoked
     // tab itself stays un-allowed until its next navigation, as on the daemon.
     try {
-      grantedOrigins.delete(new URL(tab.url).origin);
+      const revoked = new URL(tab.url);
+      grantedOrigins.delete(revoked.origin);
+      // Hand the site's permission back, unless it's localhost (granted at
+      // install, can't be removed) or another granted origin on the same
+      // host still needs it (patterns are per host, not per port).
+      const pattern = originPattern(tab.url);
+      const stillNeeded = [...grantedOrigins].some((o) => originPattern(o) === pattern);
+      if (!LOCAL_HOSTNAMES.has(revoked.hostname) && !stillNeeded) {
+        void browser.permissions.remove({ origins: [pattern] }).catch(() => {});
+      }
     } catch {
       // not a parseable URL — nothing was granted for it
     }
     void updateEarlyCaptureRegistration();
     await syncAllTabsAllowState(tabId);
   }
-  return { ok: true };
-}
-
-async function saveSettings(newPort, newToken) {
-  await browser.storage.local.set({ daemonPort: newPort, pairingToken: newToken });
-  if (socket) {
-    try {
-      socket.close();
-    } catch {
-      // ignore
-    }
-  }
-  await connect();
   return { ok: true };
 }
 
@@ -955,5 +1021,13 @@ function matchesGrantedOrigin(rawUrl) {
 function shouldAutoAllow(rawUrl) {
   return matchesTrustedPort(rawUrl) || matchesGrantedOrigin(rawUrl);
 }
+
+browser.runtime.onInstalled.addListener(({ reason, temporary }) => {
+  // First install opens the setup checklist. Temporary installs (web-ext,
+  // about:debugging) reinstall on every load, so they'd open it every time.
+  if (reason === "install" && !temporary) {
+    void browser.tabs.create({ url: browser.runtime.getURL("onboarding/onboarding.html") });
+  }
+});
 
 connect();

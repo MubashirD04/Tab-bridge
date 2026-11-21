@@ -1,7 +1,7 @@
 /**
- * Shared types for the Tab Bridge daemon.
+ * Shared types for the Sharepane daemon.
  *
- * See tab-bridge-blueprint.md, Section 2 (Data Model & Schema Spec) for the
+ * See sharepane-blueprint.md, Section 2 (Data Model & Schema Spec) for the
  * reasoning behind each entity and its retention policy.
  */
 
@@ -33,8 +33,8 @@ export interface TrustedDevPort {
 export type TabSessionSource = "manual" | "live-server-auto";
 
 /** A currently-open, currently-allowed tab, as the daemon understands it right
- * now. In-memory only — rebuilt from the extension's state on every
- * WebSocket (re)connect rather than persisted, since tabs open and close
+ * now. In-memory only — rebuilt from the extension's state each time the
+ * host starts rather than persisted, since tabs open and close
  * constantly and a stale copy would just be wrong. */
 export interface TabSession {
   tabId: number;
@@ -94,6 +94,10 @@ export interface NetworkRequestEntry {
 export interface CaptureSettings {
   consoleLogs: boolean;
   networkRequests: boolean;
+  /** Firefox only exposes tabs.captureTab once the user grants all-sites
+   * access, so screenshots are their own opt-in (Settings → Capture
+   * permissions). Mirrors whether that permission is currently granted. */
+  screenshots: boolean;
 }
 
 // Matches the blueprint's documented error codes (Section 3, API Interface
@@ -106,15 +110,15 @@ export type ErrorCode =
   | "EXTENSION_DISCONNECTED"
   | "CAPTURE_FAILED"
   | "CAPTURE_DISABLED"
-  | "UNAUTHORIZED";
+  | "TAB_REQUIRED";
 
-export class TabBridgeError extends Error {
+export class SharepaneError extends Error {
   code: ErrorCode;
   tabId?: number;
 
   constructor(code: ErrorCode, message: string, tabId?: number) {
     super(message);
-    this.name = "TabBridgeError";
+    this.name = "SharepaneError";
     this.code = code;
     this.tabId = tabId;
   }
@@ -130,14 +134,15 @@ export class TabBridgeError extends Error {
   }
 }
 
-// ---- WebSocket wire protocol (extension <-> daemon) ----
-// Envelope: every message is `{ type: string, ...payload }` over a single
-// WebSocket connection. Only one extension connection is treated as "the"
-// connection at a time; a new one replaces the old.
+// ---- Native-messaging wire protocol (extension <-> host) ----
+// Envelope: every message is `{ type: string, ...payload }`, framed as
+// described in nativeMessaging.ts. Firefox launches one host process per
+// `runtime.connectNative()` port, so there is exactly one connection per
+// host and no authentication step: only the extension listed in the host
+// manifest's `allowed_extensions` can start it.
 
 export interface HelloMessage {
   type: "hello";
-  token: string;
   browserSessionId: string;
   /** Missing is treated as both toggles off. */
   capture?: CaptureSettings;
@@ -161,6 +166,16 @@ export interface HelloAckMessage {
    * locally allowed after a reconnect, when its own allowedTabIds mirror
    * came back empty. */
   grantedOrigins: string[];
+  /** See McpClientsMessage. */
+  mcpClients: string[];
+}
+
+/** Which MCP clients (by the name they gave, e.g. "claude-code") are
+ * connected through `sharepane mcp` right now. Sent whenever it changes,
+ * so the onboarding page can tick "Claude connected" by itself. */
+export interface McpClientsMessage {
+  type: "mcp_clients";
+  clients: string[];
 }
 
 export interface TabUpdatedMessage {
@@ -186,6 +201,23 @@ export interface GrantAccessMessage {
 export interface RevokeAccessMessage {
   type: "revoke_access";
   tabId: number;
+}
+
+/** The tab the user is looking at: the active tab of the last-focused
+ * Firefox window (kept while Firefox is in the background, e.g. while the
+ * user types to Claude in a terminal). null for private windows and when
+ * there's no such tab. Lets tools default to it when no tabId is given. */
+export interface ActiveTabMessage {
+  type: "active_tab";
+  tabId: number | null;
+}
+
+/** The user removed the extension's permission for an origin outside the
+ * popup (about:addons → Permissions), so its grant must go too. Unlike
+ * revoke_access this needs no open tab at that origin. */
+export interface RevokeOriginMessage {
+  type: "revoke_origin";
+  origin: string;
 }
 
 export interface ConsoleLogMessage {
@@ -256,6 +288,8 @@ export type ExtensionToDaemonMessage =
   | TabRemovedMessage
   | GrantAccessMessage
   | RevokeAccessMessage
+  | RevokeOriginMessage
+  | ActiveTabMessage
   | ConsoleLogMessage
   | NetworkRequestMessage
   | GetContentResponseMessage
@@ -263,7 +297,17 @@ export type ExtensionToDaemonMessage =
   | SetTrustedPortsMessage
   | CaptureSettingsUpdatedMessage;
 
+/** Sent just before the host exits on startup failure, so the popup can
+ * explain why instead of showing a generic "disconnected". */
+export interface HostErrorMessage {
+  type: "host_error";
+  code: "ANOTHER_INSTANCE" | "STARTUP_FAILED";
+  message: string;
+}
+
 export type DaemonToExtensionMessage =
+  | HostErrorMessage
+  | McpClientsMessage
   | HelloAckMessage
   | GetContentRequestMessage
   | ScreenshotRequestMessage
