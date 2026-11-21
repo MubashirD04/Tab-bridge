@@ -67,19 +67,19 @@ function renderTab(status, helperOk) {
   portsText.textContent =
     ports.length === 0
       ? ""
-      : `Tabs on localhost port ${ports.join(", ")} are allowed automatically. Change the list in Settings.`;
+      : `Tabs on localhost port ${ports.join(", ")} are shared automatically. Change the list in Settings.`;
 
   if (allowed.length > 0) {
     setStep("step-tab", "done");
     $("tab-text").textContent =
-      allowed.length === 1 ? `Allowed: ${allowed[0].title || allowed[0].url}` : `${allowed.length} tabs allowed.`;
+      allowed.length === 1 ? `Shared: ${allowed[0].title || allowed[0].url}` : `${allowed.length} tabs shared.`;
     return true;
   }
   setStep("step-tab", helperOk ? "action" : "pending");
   const strong = document.createElement("strong");
-  strong.textContent = "Allow";
+  strong.textContent = "Share with Claude";
   $("tab-text").replaceChildren(
-    "Open the site you're working on, click the Sharepane toolbar icon, and choose ",
+    "Open the site you're working on, click the Sharepane toolbar icon, and turn on ",
     strong,
     "."
   );

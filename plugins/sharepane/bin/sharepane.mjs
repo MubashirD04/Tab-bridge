@@ -23726,7 +23726,7 @@ async function checkFirefox(env) {
       name,
       status: "ok",
       detail: `Connected, ${tabs.length} allowed tab${tabs.length === 1 ? "" : "s"}.`,
-      ...tabs.length === 0 ? { fix: "Click the toolbar icon on a tab and choose Allow." } : {}
+      ...tabs.length === 0 ? { fix: "Click the toolbar icon on a tab and turn on Share with Claude." } : {}
     };
   } finally {
     await client.close();

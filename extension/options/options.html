@@ -136,28 +136,28 @@
     <h1>Sharepane — Settings</h1>
 
     <div class="trust-note">
-      Sharepane never sends anything off this machine: it talks only to a local helper that Firefox starts itself. It only reads tabs you
-      explicitly allow, or tabs on a trusted local dev port — nothing else, and nothing is written to disk unless
-      you turn on the (separate, opt-in) recording feature.
+      Sharepane only reads tabs you share, or tabs on a trusted local dev port. It sends nothing to the internet
+      itself: it talks only to a helper program Firefox starts on this computer. What Claude reads from a shared
+      tab goes to Claude, which runs on Anthropic's servers.
     </div>
 
     <h2>Capture permissions</h2>
     <p class="hint">
       Off by default. These control whether Claude's <code>get_console_logs</code> and
-      <code>get_network_requests</code> tools have anything to return for an allowed tab — nothing is captured for
-      either until you turn it on here, and nothing captured ever leaves this machine either way.
+      <code>get_network_requests</code> tools have anything to return for a shared tab. Nothing is captured for
+      either until you turn it on here.
     </p>
     <div class="field checkbox-field">
-      <label><input type="checkbox" id="capture-console-logs" /> Allow console log capture</label>
+      <label><input type="checkbox" id="capture-console-logs" /> Capture console logs</label>
     </div>
     <div class="field checkbox-field">
-      <label><input type="checkbox" id="capture-network-requests" /> Allow network request capture</label>
+      <label><input type="checkbox" id="capture-network-requests" /> Capture network requests</label>
     </div>
     <div class="field checkbox-field">
       <label><input type="checkbox" id="capture-screenshots" /> Allow screenshots</label>
       <div class="hint">
         Firefox only lets an extension take screenshots once it has access to all websites, so turning this on
-        asks Firefox for that. Sharepane still only ever reads tabs you allow; turning it off hands the access back.
+        asks Firefox for that. Sharepane still only reads tabs you share; turning it off hands the access back.
       </div>
     </div>
     <span id="capture-status"></span>
