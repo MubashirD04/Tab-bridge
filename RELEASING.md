@@ -40,8 +40,10 @@ workflow finishes.
    - `AMO_JWT_SECRET`: the JWT secret
 
    The first release creates the listing from
-   [`.github/amo-metadata.json`](.github/amo-metadata.json). Afterwards, add an
-   icon and screenshots on the listing page; the API can't upload those.
+   [`.github/amo-metadata.json`](.github/amo-metadata.json). `web-ext sign`
+   doesn't upload images, so afterwards add them on the listing's Edit page
+   (Images): the icon is [`store/icon-128.png`](store/icon-128.png) and the
+   screenshots are in [`store/screenshots/`](store/screenshots/).
 
 3. **npm.** Trusted publishing (no long-lived token) can only be set up for a
    package that already exists, so the first version goes out one of two ways:
