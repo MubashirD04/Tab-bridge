@@ -68,7 +68,10 @@ const pendingNetworkRequests = new Map(); // requestId -> partial entry
 async function loadSettings() {
   const stored = await browser.storage.local.get(["captureConsoleLogs", "captureNetworkRequests"]);
   captureConsoleLogs = Boolean(stored.captureConsoleLogs);
-  captureNetworkRequests = Boolean(stored.captureNetworkRequests);
+  // Network capture also needs the optional webRequest permission, which the
+  // user can revoke in about:addons without touching the toggle.
+  const permitted = await browser.permissions.contains({ permissions: ["webRequest"] }).catch(() => false);
+  captureNetworkRequests = Boolean(stored.captureNetworkRequests) && permitted;
 }
 
 // Kicked off immediately, not just from connect(), so capture listeners that
@@ -295,6 +298,21 @@ async function reconcileGrantsWithPermissions() {
 }
 
 browser.permissions.onAdded.addListener(async (permissions) => {
+  if (permissions.permissions?.includes("webRequest")) {
+    // Only the network-capture switch asks for webRequest, so a grant means
+    // "turn it on". Stored first: the reload below would otherwise race the
+    // popup's own save_capture_settings message.
+    await browser.storage.local.set({ captureNetworkRequests: true });
+    // Same as captureTab: an API granted mid-session may not exist in this
+    // context until the background script runs again.
+    if (!browser.webRequest) {
+      await reloadKeepingSession();
+      return;
+    }
+    registerNetworkListeners();
+    captureNetworkRequests = true;
+    sendRaw({ type: "capture_settings_updated", capture: currentCaptureSettings() });
+  }
   if (!permissions.origins?.includes("<all_urls>")) return;
   if (typeof browser.tabs.captureTab !== "function") {
     // Granted mid-session, but this context was set up without the API.
@@ -307,6 +325,9 @@ browser.permissions.onAdded.addListener(async (permissions) => {
 });
 
 browser.permissions.onRemoved.addListener(async (permissions) => {
+  if (permissions.permissions?.includes("webRequest") && captureNetworkRequests) {
+    await saveCaptureSettings(captureConsoleLogs, false);
+  }
   await refreshScreenshotPermission();
   sendRaw({ type: "capture_settings_updated", capture: currentCaptureSettings() });
   await reconcileGrantsWithPermissions();
@@ -705,7 +726,10 @@ browser.runtime.onMessage.addListener((message, sender) => {
   return undefined;
 });
 
-// ---- network request capture (observe-only; no "blocking", so no elevated permission needed) ----
+// ---- network request capture (observe-only; no "blocking") ----
+//
+// webRequest is an optional permission, requested when the user turns
+// network capture on, so the extension doesn't hold it otherwise.
 
 const MAX_PENDING_NETWORK_REQUESTS = 1000;
 
@@ -745,25 +769,6 @@ function recordRequestHeaders(details) {
   if (pending) pending.requestHeaders = headersToObject(details.requestHeaders);
 }
 
-// onBeforeRequest rather than onBeforeSendHeaders: requests served from cache
-// never send headers, but still start and complete.
-browser.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (settingsLoaded) startNetworkRequest(details);
-    else void settingsReady.then(() => startNetworkRequest(details));
-  },
-  { urls: ["<all_urls>"] }
-);
-
-browser.webRequest.onBeforeSendHeaders.addListener(
-  (details) => {
-    if (settingsLoaded) recordRequestHeaders(details);
-    else void settingsReady.then(() => recordRequestHeaders(details));
-  },
-  { urls: ["<all_urls>"] },
-  ["requestHeaders"]
-);
-
 function finishNetworkRequest(details, extra) {
   const pending = pendingNetworkRequests.get(details.requestId);
   if (!pending) return;
@@ -786,26 +791,56 @@ function finishNetworkRequest(details, extra) {
   });
 }
 
-browser.webRequest.onCompleted.addListener(
-  (details) => finishNetworkRequest(details, { statusCode: details.statusCode, fromCache: details.fromCache }),
-  { urls: ["<all_urls>"] },
-  ["responseHeaders"]
-);
+let networkListenersRegistered = false;
 
-// Each redirect hop is its own entry; the follow-up request fires
-// onBeforeRequest again under the same requestId.
-browser.webRequest.onBeforeRedirect.addListener(
-  (details) => finishNetworkRequest(details, { statusCode: details.statusCode, redirectUrl: details.redirectUrl }),
-  { urls: ["<all_urls>"] },
-  ["responseHeaders"]
-);
+function registerNetworkListeners() {
+  if (networkListenersRegistered || !browser.webRequest) return;
+  networkListenersRegistered = true;
 
-// Failed requests (CORS, DNS, refused connections, blocked) are often the
-// ones worth seeing, so they're recorded rather than dropped.
-browser.webRequest.onErrorOccurred.addListener(
-  (details) => finishNetworkRequest(details, { error: details.error }),
-  { urls: ["<all_urls>"] }
-);
+  // onBeforeRequest rather than onBeforeSendHeaders: requests served from cache
+  // never send headers, but still start and complete.
+  browser.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      if (settingsLoaded) startNetworkRequest(details);
+      else void settingsReady.then(() => startNetworkRequest(details));
+    },
+    { urls: ["<all_urls>"] }
+  );
+
+  browser.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
+      if (settingsLoaded) recordRequestHeaders(details);
+      else void settingsReady.then(() => recordRequestHeaders(details));
+    },
+    { urls: ["<all_urls>"] },
+    ["requestHeaders"]
+  );
+
+  browser.webRequest.onCompleted.addListener(
+    (details) => finishNetworkRequest(details, { statusCode: details.statusCode, fromCache: details.fromCache }),
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+  );
+
+  // Each redirect hop is its own entry; the follow-up request fires
+  // onBeforeRequest again under the same requestId.
+  browser.webRequest.onBeforeRedirect.addListener(
+    (details) => finishNetworkRequest(details, { statusCode: details.statusCode, redirectUrl: details.redirectUrl }),
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+  );
+
+  // Failed requests (CORS, DNS, refused connections, blocked) are often the
+  // ones worth seeing, so they're recorded rather than dropped.
+  browser.webRequest.onErrorOccurred.addListener(
+    (details) => finishNetworkRequest(details, { error: details.error }),
+    { urls: ["<all_urls>"] }
+  );
+}
+
+// Synchronously at startup when already granted, so the event page wakes
+// for requests the way it did when the permission was required.
+registerNetworkListeners();
 
 function headersToObject(headers) {
   const out = {};

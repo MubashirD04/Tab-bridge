@@ -141,7 +141,17 @@ function renderCapture(status) {
       captureNetworkRequests: networkSw.checked,
     });
   consoleSw.onchange = saveLogs;
-  networkSw.onchange = saveLogs;
+  // Network capture needs the optional webRequest permission:
+  // permissions.request has to be the first await in the change handler.
+  networkSw.onchange = async () => {
+    try {
+      if (networkSw.checked) networkSw.checked = await browser.permissions.request({ permissions: ["webRequest"] });
+      else await browser.permissions.remove({ permissions: ["webRequest"] });
+    } catch {
+      networkSw.checked = false;
+    }
+    await saveLogs();
+  };
 
   // Screenshots are a Firefox permission, not a stored setting. Granting it
   // makes the extension restart itself once (see background.js), which

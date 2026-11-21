@@ -1,12 +1,16 @@
 {
   "categories": { "firefox": ["web-development"] },
   "summary": {
-    "en-US": "Let Claude read the Firefox tabs you choose: page HTML, screenshots, console logs and network requests. You share each tab yourself, it's read-only, and nothing leaves your machine."
+    "en-US": "Let Claude read the Firefox tabs you share: page HTML, screenshots, console logs and network requests. Read-only. Needs the free Sharepane helper (npx sharepane setup) and Claude Code or Claude Desktop."
+  },
+  "description": {
+    "en-US": "Sharepane lets Claude (in Claude Code or Claude Desktop) read the Firefox tabs you choose, so it can debug the page you're working on.\n\n<b>What Claude can read</b>\n- The page's HTML and text\n- Console logs and network requests (each off until you turn it on)\n- Screenshots (off until you turn them on)\n\nAll access is read-only: Claude can't click, type or navigate.\n\n<b>What's shared, and where it goes</b>\n- A tab is shared only after you turn on Share with Claude in the toolbar popup. Tabs on common local dev-server ports (for example localhost:5000 and 5500) are shared automatically; you can change that list in Settings.\n- Private-browsing tabs are never shared.\n- Sharepane itself sends nothing to the internet. It passes what you share to the Sharepane helper on your computer, which hands it to Claude. Claude runs on Anthropic's servers, so what it reads from a shared tab is sent to Anthropic like anything else you give Claude.\n\n<b>Setup</b>\nSharepane needs a small helper program that Firefox starts for it. With Node.js 18 or later, run <code>npx sharepane setup</code> once. The extension's setup page walks you through it.\n\nSharepane is open source (MIT) and is not made by or affiliated with Anthropic or Mozilla. Works on Firefox for desktop only."
   },
   "homepage": { "en-US": "https://github.com/MubashirD04/Tab-bridge" },
   "support_url": { "en-US": "https://github.com/MubashirD04/Tab-bridge/issues" },
   "version": {
     "license": "MIT",
-    "approval_notes": "Sharepane connects to a local helper over native messaging (host name \"sharepane\"); it makes no network requests of its own. The helper is the open-source npm package \"sharepane\" from the same repository (packages/daemon). To test: install Node.js 18+, run `npx sharepane setup`, reload the extension, open any page, click the toolbar icon and turn on Share with Claude. `npx sharepane doctor` then reports \"Firefox connection: Connected, 1 allowed tab\". The extension's code is not minified or bundled. Optional <all_urls> is requested only when the user shares a site or turns on screenshots (tabs.captureTab needs it)."
+    "compatibility": { "firefox": { "min": "140.0" } },
+    "approval_notes": "Sharepane connects to a local helper over native messaging (host name \"sharepane\"); the extension makes no network requests of its own. The helper is the open-source npm package \"sharepane\" from the same repository (packages/daemon); it serves the shared tab's data to the user's local Claude Code / Claude Desktop over MCP. To test: install Node.js 18+, run `npx sharepane setup`, load the extension, open any page, click the toolbar icon and turn on Share with Claude. `npx sharepane doctor` then reports \"Firefox connection: Connected, 1 allowed tab\". The extension's code is not minified or bundled. Optional permissions: <all_urls> is requested when the user shares a site or turns on screenshots (tabs.captureTab needs it); webRequest is requested when the user turns on network capture. Desktop only: native messaging isn't available on Android."
   }
 }

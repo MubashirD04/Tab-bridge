@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Sharepane",
   "version": "0.2.0",
-  "description": "Lets Claude read Firefox tabs you explicitly allow, or tabs on your local dev server \u2014 nothing else, and nothing ever leaves your machine.",
+  "description": "Lets Claude read the Firefox tabs you share, and tabs on your local dev server. Sharepane itself sends nothing to the internet; what you share goes to Claude.",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
@@ -26,8 +26,10 @@
     "tabs",
     "storage",
     "scripting",
-    "webRequest",
     "nativeMessaging"
+  ],
+  "optional_permissions": [
+    "webRequest"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
@@ -44,10 +46,11 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "sharepane@sharepane.dev",
-      "strict_min_version": "128.0",
+      "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": [
-          "none"
+          "websiteContent",
+          "browsingActivity"
         ]
       }
     }

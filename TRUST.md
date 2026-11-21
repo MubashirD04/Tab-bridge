@@ -3,10 +3,13 @@
 The full trust story, because this extension asks for broad tab-read
 permissions and that deserves a straight answer.
 
-- **Nothing leaves your machine.** The daemon binds to `127.0.0.1` only. The
-  extension declares `data_collection_permissions: { required: ["none"] }`
-  in its manifest — this isn't just a README claim, it's a manifest-level
-  assertion Firefox itself surfaces to you at install time.
+- **Sharepane sends nothing to the internet itself.** The extension talks
+  only to a helper program on your computer, over Firefox's native messaging.
+  What Claude reads from a shared tab goes to Claude, which runs on
+  Anthropic's servers, so share only what you'd paste into a chat. The
+  manifest declares this as `data_collection_permissions: { required:
+  ["websiteContent", "browsingActivity"] }`, which Firefox shows you before
+  you install.
 - **Read-only, always.** There is no tool that lets Claude grant itself
   access to a new tab. Only your click in the popup, or a tab already being
   on a trusted local dev port, does that.

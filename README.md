@@ -4,8 +4,8 @@ Lets Claude Code (or Claude Desktop) read the HTML, console logs, network
 requests, and screenshots of specific Firefox tabs you explicitly allow —
 without a manual click every time.
 
-**Trust, in brief:** nothing leaves your machine (daemon binds to
-`127.0.0.1` only), everything is read-only, and console/network capture is
+**Trust, in brief:** Sharepane sends nothing to the internet itself; what you
+share goes to Claude, which runs on Anthropic's servers. Everything is read-only, and console/network capture is
 off by default until you opt in per-tab. Full details in
 [TRUST.md](TRUST.md).
 

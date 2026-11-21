@@ -140,7 +140,19 @@ async function saveCaptureSettings() {
 }
 
 document.getElementById("capture-console-logs").addEventListener("change", saveCaptureSettings);
-document.getElementById("capture-network-requests").addEventListener("change", saveCaptureSettings);
+// Network capture needs the optional webRequest permission:
+// permissions.request has to be the first await in the change handler.
+document.getElementById("capture-network-requests").addEventListener("change", async (e) => {
+  const checkbox = e.target;
+  try {
+    if (checkbox.checked) checkbox.checked = await browser.permissions.request({ permissions: ["webRequest"] });
+    else await browser.permissions.remove({ permissions: ["webRequest"] });
+  } catch (err) {
+    checkbox.checked = false;
+    console.warn("Sharepane: network permission change failed", err);
+  }
+  await saveCaptureSettings();
+});
 
 // Screenshots are a Firefox permission, not a stored setting: granting
 // <all_urls> is what turns them on (background.js listens for the change).

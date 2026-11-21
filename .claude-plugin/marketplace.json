@@ -6,7 +6,7 @@
     {
       "name": "sharepane",
       "source": "./plugins/sharepane",
-      "description": "Read the Firefox tabs you share with Claude: HTML, screenshots, console logs and network requests. Local only."
+      "description": "Read the Firefox tabs you share with Claude: HTML, screenshots, console logs and network requests. Sharepane itself runs locally."
     }
   ]
 }
