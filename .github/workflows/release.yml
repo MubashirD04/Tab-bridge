@@ -34,6 +34,9 @@ jobs:
       - run: npm test
       - run: npm run lint:extension
       - run: npm run build
+      - name: Plugin MCP server starts
+        run: node scripts/check-plugin.mjs plugins/sharepane
+
       - name: Plugin bundle is up to date
         run: |
           if ! git diff --exit-code --stat -- plugins/sharepane/bin; then

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "tab-bridge": {
+    "sharepane": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/tab-bridge.mjs", "mcp"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/sharepane.mjs", "mcp"]
     }
   }
 }

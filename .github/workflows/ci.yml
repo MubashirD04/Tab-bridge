@@ -35,6 +35,9 @@ jobs:
       # The Claude Code plugin ships the bundled CLI in git (plugins install
       # straight from the repo, with no build step), so it must match what
       # the source builds to.
+      - name: Plugin MCP server starts
+        run: node scripts/check-plugin.mjs plugins/sharepane
+
       - name: Plugin bundle is up to date
         run: |
           if ! git diff --exit-code --stat -- plugins/sharepane/bin; then
