@@ -54,7 +54,7 @@ workflow finishes.
      `NPM_TOKEN` secret in the `release` environment.
 
    Then, on npmjs.com, open the package's Settings → Trusted publishing and add
-   GitHub Actions with repository `MubashirD04/Tab-bridge`, workflow
+   GitHub Actions with repository `MubashirD04/sharepane`, workflow
    `release.yml` and environment `release`. Delete `NPM_TOKEN` once that works.
    Packages published this way carry a provenance statement linking them to
    the exact workflow run.

@@ -4,7 +4,7 @@ Let Claude read the Firefox tabs you choose: page HTML, screenshots, console
 logs and network requests. Read-only. Sharepane itself sends nothing to the
 internet; what you share goes to Claude, which runs on Anthropic's servers.
 
-This package is the local half of [Sharepane](https://github.com/MubashirD04/Tab-bridge).
+This package is the local half of [Sharepane](https://github.com/MubashirD04/sharepane).
 You also need the Sharepane Firefox extension.
 
 ## Set up

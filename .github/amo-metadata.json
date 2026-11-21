@@ -6,8 +6,8 @@
   "description": {
     "en-US": "Sharepane lets Claude (in Claude Code or Claude Desktop) read the Firefox tabs you choose, so it can debug the page you're working on.\n\n<b>What Claude can read</b>\n- The page's HTML and text\n- Console logs and network requests (each off until you turn it on)\n- Screenshots (off until you turn them on)\n\nAll access is read-only: Claude can't click, type or navigate.\n\n<b>What's shared, and where it goes</b>\n- A tab is shared only after you turn on Share with Claude in the toolbar popup. Tabs on common local dev-server ports (for example localhost:5000 and 5500) are shared automatically; you can change that list in Settings.\n- Private-browsing tabs are never shared.\n- Sharepane itself sends nothing to the internet. It passes what you share to the Sharepane helper on your computer, which hands it to Claude. Claude runs on Anthropic's servers, so what it reads from a shared tab is sent to Anthropic like anything else you give Claude.\n\n<b>Setup</b>\nSharepane needs a small helper program that Firefox starts for it. With Node.js 18 or later, run <code>npx sharepane setup</code> once. The extension's setup page walks you through it.\n\nSharepane is open source (MIT) and is not made by or affiliated with Anthropic or Mozilla. Works on Firefox for desktop only."
   },
-  "homepage": { "en-US": "https://github.com/MubashirD04/Tab-bridge" },
-  "support_url": { "en-US": "https://github.com/MubashirD04/Tab-bridge/issues" },
+  "homepage": { "en-US": "https://github.com/MubashirD04/sharepane" },
+  "support_url": { "en-US": "https://github.com/MubashirD04/sharepane/issues" },
   "version": {
     "license": "MIT",
     "compatibility": { "firefox": { "min": "140.0" } },

@@ -33,7 +33,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MubashirD04/Tab-bridge.git",
+    "url": "git+https://github.com/MubashirD04/sharepane.git",
     "directory": "packages/daemon"
   }
 }

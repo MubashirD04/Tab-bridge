@@ -3,8 +3,8 @@
   "version": "0.2.0",
   "description": "Let Claude read the Firefox tabs you choose: page HTML, screenshots, console logs and network requests. Sharepane runs locally; only Claude sees what you share.",
   "author": { "name": "Sharepane contributors" },
-  "homepage": "https://github.com/MubashirD04/Tab-bridge",
-  "repository": "https://github.com/MubashirD04/Tab-bridge",
+  "homepage": "https://github.com/MubashirD04/sharepane",
+  "repository": "https://github.com/MubashirD04/sharepane",
   "license": "MIT",
   "keywords": ["firefox", "browser", "debugging", "frontend", "mcp"]
 }
