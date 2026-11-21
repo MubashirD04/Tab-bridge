@@ -1,0 +1,151 @@
+name: Release
+
+# Push a tag like v0.3.0 to release. Everything ships at that one version:
+#   1. checks it the way CI does, and that the tag matches the files
+#   2. submits the extension to addons.mozilla.org for signing and listing
+#   3. publishes the `sharepane` npm package
+#   4. creates the GitHub release
+# Setup (secrets, first publish) is in RELEASING.md.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Tag matches the version in every package
+        run: node scripts/version.mjs check "$GITHUB_REF_NAME"
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint:extension
+      - run: npm run build
+      - name: Plugin bundle is up to date
+        run: |
+          if ! git diff --exit-code --stat -- plugins/sharepane/bin; then
+            echo "::error::plugins/sharepane/bin/sharepane.mjs is out of date. Run 'npm run build', commit, and tag again."
+            exit 1
+          fi
+
+  firefox:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+
+      # Release notes on AMO come from the tag's message
+      # (git tag -a v0.3.0 -m "What changed").
+      - name: Prepare AMO metadata
+        run: |
+          git fetch --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          jq --arg notes "$notes" \
+            'if ($notes | test("\\S")) then .version.release_notes = {"en-US": $notes} else . end' \
+            .github/amo-metadata.json > "$RUNNER_TEMP/amo-metadata.json"
+
+      - name: Package the extension
+        run: npx web-ext build --source-dir extension --artifacts-dir web-ext-package --overwrite-dest
+
+      # Listed: the add-on appears on addons.mozilla.org and Firefox updates
+      # it by itself. Review can take from minutes to days, so this submits
+      # and returns instead of waiting; the result arrives by email.
+      - name: Submit to addons.mozilla.org
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ -z "$WEB_EXT_API_KEY" ] || [ -z "$WEB_EXT_API_SECRET" ]; then
+            echo "::error::AMO_JWT_ISSUER and AMO_JWT_SECRET aren't set. See RELEASING.md."
+            exit 1
+          fi
+          npx web-ext sign \
+            --source-dir extension \
+            --artifacts-dir web-ext-artifacts \
+            --channel listed \
+            --amo-metadata "$RUNNER_TEMP/amo-metadata.json" \
+            --approval-timeout 0
+
+      - name: Keep the exact package that was submitted
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharepane-extension-${{ github.ref_name }}
+          path: web-ext-package/*.zip
+
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@v4
+      # Node 24 ships npm 11, which trusted publishing needs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+
+      # Re-running a release whose npm step already went through shouldn't fail.
+      - name: Check whether this version is already on npm
+        id: published
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if npm view "sharepane@$version" version >/dev/null 2>&1; then
+            echo "sharepane@$version is already published; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Trusted publishing (no token) once it's configured on npmjs.com;
+      # until then NPM_TOKEN is used. prepack rebuilds the bundle.
+      - name: Publish
+        if: steps.published.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace packages/daemon --provenance --access public
+
+  github-release:
+    needs: [firefox, npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; skipping."
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --notes "$(cat <<EOF
+          **Install**
+          - Firefox extension: https://addons.mozilla.org/firefox/addon/sharepane/ (version $version may still be in Mozilla's review for a few days)
+          - Helper: \`npx sharepane setup\` ([npm](https://www.npmjs.com/package/sharepane/v/$version))
+          - Claude Code plugin: \`/plugin marketplace add ${GITHUB_REPOSITORY}\`, then \`/plugin install sharepane@sharepane\`
+          EOF
+          )"
