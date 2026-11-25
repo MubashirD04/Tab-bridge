@@ -4,7 +4,11 @@ Let Claude read the Firefox tabs you choose, so it can debug the page you're
 working on. Claude Code or Claude Desktop gets read-only access to a shared
 tab's HTML, screenshots, console logs and network requests.
 
-![The Sharepane popup on a shared tab](store/screenshots/1-popup.png)
+
+
+https://github.com/user-attachments/assets/e66aecee-9070-42e2-8595-d681328c67a4
+
+
 
 You decide what's shared: a tab is visible to Claude only after you turn on
 **Share with Claude** in the toolbar popup. Claude can't click, type or
