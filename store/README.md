@@ -5,6 +5,8 @@ Images for the addons.mozilla.org listing.
 - `icon-128.png` (plus 64 and 32): the listing icon, exported from
   [`extension/icons/icon.svg`](../extension/icons/icon.svg) so the listing and
   the toolbar match.
+- `demo.mp4`: a 43-second walkthrough of installing and using Sharepane,
+  made in [`demo-video/`](demo-video/) from the same sample data.
 - `screenshots/`: 1280×800 listing screenshots, in the order they should
   appear. They show the real popup, setup guide and settings pages with
   made-up sample data (the Acme Outfitters shop and its tabs don't exist).
