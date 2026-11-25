@@ -35,8 +35,12 @@ function renderHelper(status) {
       text.textContent = "The helper stopped unexpectedly. Restarting it…";
       return false;
     default:
+      // Still looking for the helper. On a first run it may not be installed
+      // yet, so give the command now instead of leaving the user waiting.
       setStep("step-helper", "waiting");
-      text.textContent = "Connecting…";
+      text.textContent =
+        "Looking for the helper… If you haven't set it up yet, run this once in a terminal (Node.js 18 or later). Using the Claude Code plugin? Run /sharepane:setup in Claude instead.";
+      $("helper-command").hidden = false;
       return false;
   }
 }
